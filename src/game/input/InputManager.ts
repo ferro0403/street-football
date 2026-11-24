@@ -12,6 +12,7 @@ export interface ScreenInput {
   shoot: boolean;
   tackle: boolean;
   slide: boolean;
+  shield: boolean;
   switch: boolean;
   pause: boolean;
   debug: boolean;
@@ -55,11 +56,12 @@ export class InputManager {
         down: K.DOWN,
         left: K.LEFT,
         right: K.RIGHT,
-        // Mano destra: J passa, K tira, L contrasto, U scivolata.
+        // Mano destra: J passa, K tira, L contrasto, U scivolata, I protegge palla.
         pass: K.J,
         shoot: K.K,
         tackle: K.L,
         slide: K.U,
+        shield: K.I,
         sprint: K.SHIFT,
         sprint2: K.SPACE,
         switch: K.Q,
@@ -71,6 +73,7 @@ export class InputManager {
         shoot2: K.X,
         tackle2: K.C,
         slide2: K.V,
+        shield2: K.B,
       };
       for (const [name, code] of Object.entries(map)) {
         const key = kb.addKey(code, true, false);
@@ -104,6 +107,7 @@ export class InputManager {
       shoot: this.down('shoot', 'shoot2'),
       tackle: this.down('tackle', 'tackle2'),
       slide: this.down('slide', 'slide2'),
+      shield: this.down('shield', 'shield2'),
       switch: this.down('switch'),
       pause: this.down('pause', 'pause2'),
       debug: this.down('debug'),
@@ -137,6 +141,7 @@ export class InputManager {
       out.shoot ||= b(PAD.B);
       out.tackle ||= b(PAD.X);
       out.slide ||= b(PAD.Y);
+      out.shield ||= b(PAD.LT);
       out.switch ||= b(PAD.LB);
       out.sprint ||= b(PAD.RT) || b(PAD.RB) || b(PAD.L3);
       out.pause ||= b(PAD.START);
@@ -154,6 +159,8 @@ export class InputManager {
     out.shoot ||= t.shoot || touchLatch.has('shoot');
     out.tackle ||= t.tackle || touchLatch.has('tackle');
     out.slide ||= t.slide || touchLatch.has('slide');
+    // Il pulsante CONTRASTO con la palla diventa PROTEGGI (tenuto premuto).
+    out.shield ||= t.tackle;
     out.pause ||= t.pause;
     touchLatch.clear();
     this.latched.clear();

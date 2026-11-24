@@ -216,6 +216,7 @@ export class MenuScene extends Phaser.Scene {
       'Tiro (tieni)    K  (X)       B / Cerchio',
       'Contrasto       L  (C)       X / Quadrato',
       'Scivolata       U  (V)       Y / Triangolo',
+      'Proteggi palla  I  (B)       LT / L2',
       'Scatto          Shift        RT / RB',
       'Cambio giocat.  Q            LB / L1',
       'Pausa           Esc / P      Start',
@@ -224,7 +225,9 @@ export class MenuScene extends Phaser.Scene {
       'Passaggio: un tocco, al compagno verso cui punti.',
       'Senza palla, Passaggio = cambio giocatore.',
       'Tiro: tieni premuto per piu potenza, mira con la levetta.',
-      'Niente falli: contrasta e scivola quando vuoi!',
+      'Contrasto: entra quando la palla si stacca dal piede.',
+      'Da dietro non si ruba. "!" = sta per entrare:',
+      'cambia direzione o scatta per saltarlo.',
       'Telefono: trascina CONTRASTO = scivolata.',
     ]);
   }

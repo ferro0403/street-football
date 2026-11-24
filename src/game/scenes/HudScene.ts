@@ -30,7 +30,8 @@ const BUTTONS: Omit<TouchButton, 'x' | 'y' | 'g' | 't' | 'down'>[] = [
   { key: 'pass', dx: -178, dy: -64, r: 56, label: 'PASSA', alt: 'CAMBIO', color: 0x2ec4b6 },
   { key: 'sprint', dx: -64, dy: -52, r: 48, label: 'SCATTO', alt: 'SCATTO', color: 0x7cff6b },
   // Difesa: CONTRASTO (trascinalo = scivolata) e SCIVOLATA.
-  { key: 'tackle', dx: -200, dy: -182, r: 50, label: '', alt: 'CONTRASTO', color: 0xffb14d },
+  // Con la palla lo stesso pulsante è PROTEGGI (tenuto premuto).
+  { key: 'tackle', dx: -200, dy: -182, r: 50, label: 'PROTEGGI', alt: 'CONTRASTO', color: 0xffb14d },
   { key: 'slide', dx: -298, dy: -76, r: 44, label: '', alt: 'SCIVOLATA', color: 0x4d9dff },
 ];
 
@@ -196,6 +197,12 @@ export class HudScene extends Phaser.Scene {
         break;
       case 'tackle':
         this.toast(e.skill === 'slide' ? 'SCIVOLATA!' : 'RUBATA!', e.team === 0 ? '#7cff6b' : '#ff4d6d');
+        break;
+      case 'tackleLoose':
+        this.toast('PALLA CONTESA!', '#ffb14d');
+        break;
+      case 'dodge':
+        this.toast('SALTATO!', e.team === 0 ? '#ff4d6d' : '#7cff6b');
         break;
       case 'end': {
         const [a, b] = s.score;
@@ -393,7 +400,7 @@ export class HudScene extends Phaser.Scene {
     const { w } = view(this);
     const b = this.buttonAt(p.x, p.y);
     if (b) {
-      if (b.key === 'tackle') {
+      if (b.key === 'tackle' && !this.hasBallLabels) {
         // In attesa: tap = contrasto, swipe = scivolata.
         this.grabs.set(p.id, { kind: 'btn', key: b.key, x0: p.x, y0: p.y, pending: this.time.now });
         this.syncButtons();

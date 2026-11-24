@@ -5,6 +5,11 @@ import { CENTER_X, CENTER_Y, DT, FIELD, PHYS, RULES, PLAYERS_PER_TEAM } from './
 import { clamp, dist, len, norm } from './math';
 import { seedFrom } from './rng';
 import {
+  EVADE_COOLDOWN,
+  EVADE_WINDOW,
+  INTERCEPT_MAX_SPEED,
+  INTERCEPT_RADIUS,
+  SHIELD_SPEED_MULT,
   SPRINT_MULT,
   STAMINA_DRAIN,
   STAMINA_REGEN,
@@ -15,9 +20,10 @@ import {
   dribbleSpeedMult,
   overall,
   runSpeed,
+  shieldTurn,
 } from './stats';
 import { attachBall, stepBall } from './ball';
-import { finishAction, freePass, pass, passTargetInDir, setAction, shoot, shotAim, startSlide, startTackle, updateTackles } from './actions';
+import { choosePass, finishAction, freePass, pass, setAction, shoot, shotAim, startSlide, startTackle, updateTackles } from './actions';
 import { aiFieldPlayer, type Intent } from './ai';
 import { updateKeeper } from './keeper';
 import { sanitizeTune } from './tune';
@@ -32,6 +38,7 @@ export const NEUTRAL_INPUT: PlayerInput = Object.freeze({
   shoot: false,
   tackle: false,
   slide: false,
+  shield: false,
   switch: false,
 }) as PlayerInput;
 
@@ -81,8 +88,16 @@ export function createMatch(cfg: MatchConfig): MatchState {
         charge: 0,
         charging: false,
         dribble: 0,
+        sprinting: false,
+        shielding: false,
+        shx: ti === 0 ? 1 : -1,
+        shy: 0,
+        evade: 0,
+        evadeCd: 0,
+        lmx: 0,
+        lmy: 0,
         human: null,
-        ai: { think: 0, tx: 0, ty: 0, still: 0 },
+        ai: { think: 0, tx: 0, ty: 0, still: 0, windup: 0, tackleWait: 0, cut: 0, pressed: 0 },
         gk: { react: 0, seenShot: -1, rolledShot: -1, hold: 0 },
       });
     });
@@ -212,6 +227,14 @@ export function resetKickoff(s: MatchState, team: TeamIndex): void {
     p.charging = false;
     p.ai.think = 0;
     p.ai.still = 0;
+    p.ai.windup = 0;
+    p.ai.tackleWait = 0;
+    p.ai.cut = 0;
+    p.ai.pressed = 0;
+    p.shielding = false;
+    p.sprinting = false;
+    p.evade = 0;
+    p.evadeCd = 0;
     p.ai.tx = p.x;
     p.ai.ty = p.y;
     p.gk.hold = 0;
@@ -261,7 +284,6 @@ export function stepMatch(s: MatchState, inputs: InputMap): void {
     if ((inp.switch && !c.prev.switch) || (!hasBall && inp.pass && !c.prev.pass)) switchToBest(s, c);
   }
 
-  let ownerSprinting = false;
   for (const p of s.players) {
     tickTimers(p);
     if (p.role === 'gk') {
@@ -272,8 +294,11 @@ export function stepMatch(s: MatchState, inputs: InputMap): void {
     const c = p.human ? s.controllers.find((x) => x.id === p.human) : undefined;
     const intent = c ? humanIntent(s, p, inputs[c.id] ?? NEUTRAL_INPUT, c.prev) : aiFieldPlayer(s, p);
     updateTackles(s, p);
-    if (s.ball.owner === p.idx) ownerSprinting = intent.sprint && p.stamina > 0.02;
+    const owner = s.ball.owner === p.idx;
+    p.shielding = owner && !!intent.shield && !intent.sprint && p.stun <= 0;
+    trackCut(p, intent, owner);
     movePlayer(s, p, intent, 0);
+    updateShield(s, p);
     trackStill(p);
   }
   for (const c of s.controllers) c.prev = { ...(inputs[c.id] ?? NEUTRAL_INPUT) };
@@ -283,7 +308,7 @@ export function stepMatch(s: MatchState, inputs: InputMap): void {
   const b = s.ball;
   if (b.kickCd > 0) b.kickCd -= DT;
   if (b.owner >= 0) {
-    attachBall(s, ownerSprinting);
+    attachBall(s);
   } else {
     const scored = stepBall(s);
     if (scored >= 0) {
@@ -318,6 +343,55 @@ function tickTimers(p: PlayerState): void {
   if (p.stun > 0) p.stun = Math.max(0, p.stun - DT);
   if (p.tackleCd > 0) p.tackleCd = Math.max(0, p.tackleCd - DT);
   if (p.slideCd > 0) p.slideCd = Math.max(0, p.slideCd - DT);
+  if (p.evade > 0) p.evade = Math.max(0, p.evade - DT);
+  if (p.evadeCd > 0) p.evadeCd = Math.max(0, p.evadeCd - DT);
+}
+
+/** Cambio di direzione brusco con la palla = finestra di schivata (vale per umani e CPU). */
+function trackCut(p: PlayerState, it: Intent, owner: boolean): void {
+  const l = len(it.mx, it.my);
+  if (l < 0.5) return;
+  const ux = it.mx / l;
+  const uy = it.my / l;
+  if (owner && (p.lmx !== 0 || p.lmy !== 0) && ux * p.lmx + uy * p.lmy < 0.35) startEvade(p);
+  p.lmx = ux;
+  p.lmy = uy;
+}
+
+function startEvade(p: PlayerState): void {
+  if (p.evadeCd > 0) return;
+  p.evade = EVADE_WINDOW;
+  p.evadeCd = EVADE_COOLDOWN;
+}
+
+/**
+ * Protezione: il corpo si mette tra la palla e il difensore più vicino, ruotando a velocità
+ * limitata (un difensore rapido che gira intorno può trovare la palla scoperta).
+ */
+function updateShield(s: MatchState, p: PlayerState): void {
+  if (!p.shielding) {
+    p.shx = p.fx;
+    p.shy = p.fy;
+    return;
+  }
+  let opp: PlayerState | null = null;
+  let od = 5;
+  for (const q of s.players) {
+    if (q.team === p.team || q.role === 'gk') continue;
+    const d = dist(p.x, p.y, q.x, q.y);
+    if (d < od) {
+      od = d;
+      opp = q;
+    }
+  }
+  const [tx, ty] = opp ? norm(p.x - opp.x, p.y - opp.y) : [p.shx, p.shy];
+  const k = Math.min(1, shieldTurn(p.stats) * DT);
+  let [nx, ny] = norm(p.shx + (tx - p.shx) * k, p.shy + (ty - p.shy) * k);
+  if (nx === 0 && ny === 0) [nx, ny] = [-p.shy, p.shx]; // esattamente opposta: gira di lato
+  p.shx = nx;
+  p.shy = ny;
+  p.fx = nx;
+  p.fy = ny;
 }
 
 /** Guardia anti-blocco: quanto tempo il giocatore è rimasto fermo (l'IA la usa per ripensare). */
@@ -341,8 +415,6 @@ function humanIntent(s: MatchState, p: PlayerState, inp: PlayerInput, prev: Play
   const pressed = (k: keyof PlayerInput) => !!inp[k] && !prev[k];
   const b = s.ball;
   const hasBall = b.owner === p.idx;
-  const dirX = l > 0.2 ? mx : p.fx;
-  const dirY = l > 0.2 ? my : p.fy;
 
   if (hasBall && p.stun <= 0) {
     // Tiro: si carica tenendo premuto, parte al rilascio.
@@ -353,24 +425,16 @@ function humanIntent(s: MatchState, p: PlayerState, inp: PlayerInput, prev: Play
       shoot(s, p, p.charge, shotAim(my));
       return { mx, my, sprint: false };
     }
-    // Passaggio: alla pressione, subito. Al compagno nella direzione indicata, altrimenti
-    // nella direzione stessa (anche contro il muro, che la fa rimbalzare).
+    // Passaggio: alla pressione, subito. Al compagno verso cui punti; contro il muro solo di
+    // proposito; altrimenti al compagno più libero. Mai nel vuoto. Il controllo passa al
+    // compagno quando riceve (intanto lui va incontro alla palla).
     if (pressed('pass') && !p.charging) {
-      const t = passTargetInDir(s, p, dirX, dirY);
-      if (t >= 0) {
-        pass(s, p, t);
-        autoSwitchToReceiver(s, p.team, t);
-      } else if (l > 0.2) {
-        freePass(s, p, mx, my);
-      } else {
-        const t2 = passTargetInDir(s, p, p.fx, p.fy) >= 0 ? passTargetInDir(s, p, p.fx, p.fy) : nearestMate(s, p);
-        if (t2 >= 0) {
-          pass(s, p, t2);
-          autoSwitchToReceiver(s, p.team, t2);
-        }
-      }
+      const c = choosePass(s, p, mx, my);
+      if (c.target >= 0) pass(s, p, c.target);
+      else freePass(s, p, c.wx, c.wy);
       return { mx, my, sprint: false };
     }
+    if (pressed('sprint')) startEvade(p);
   } else {
     p.charge = 0;
     p.charging = false;
@@ -379,21 +443,7 @@ function humanIntent(s: MatchState, p: PlayerState, inp: PlayerInput, prev: Play
       else if (pressed('slide')) startSlide(s, p);
     }
   }
-  return { mx, my, sprint: inp.sprint };
-}
-
-function nearestMate(s: MatchState, p: PlayerState): number {
-  let best = -1;
-  let bd = Infinity;
-  for (const q of s.players) {
-    if (q.team !== p.team || q.idx === p.idx || q.role === 'gk') continue;
-    const d = dist(p.x, p.y, q.x, q.y);
-    if (d < bd) {
-      bd = d;
-      best = q.idx;
-    }
-  }
-  return best;
+  return { mx, my, sprint: inp.sprint, shield: hasBall && !!inp.shield };
 }
 
 /** Cambio: il compagno più vicino alla palla (mai il portiere, mai uno di un altro umano). */
@@ -441,12 +491,6 @@ function autoSwitchOnPossession(s: MatchState, team: TeamIndex, owner: number): 
   }
 }
 
-function autoSwitchToReceiver(s: MatchState, team: TeamIndex, target: number): void {
-  const c = soloController(s, team);
-  const r = s.players[target];
-  if (c && r.role === 'field' && !r.human) assign(s, c, target);
-}
-
 // --- Movimento: reattivo, senza ritardi ----------------------------------------------------
 
 const LOCKED: ReadonlySet<string> = new Set(['tackle', 'slide', 'fall', 'dive']);
@@ -473,6 +517,8 @@ function movePlayer(s: MatchState, p: PlayerState, it: Intent, keeperSpeed: numb
   }
   if (hasBall) maxV *= dribbleSpeedMult(st);
   if (p.charging) maxV *= 0.8;
+  if (p.shielding) maxV *= SHIELD_SPEED_MULT;
+  p.sprinting = sprinting;
 
   if (!locked) {
     const k = Math.min(1, acceleration(st) * DT);
@@ -540,31 +586,43 @@ function separatePlayers(s: MatchState): void {
 function tryPossession(s: MatchState): void {
   const b = s.ball;
   if (b.inGoal >= 0) return;
+  const passing = b.passTarget >= 0;
+  const bs = len(b.vx, b.vy);
   let best: PlayerState | null = null;
   let bd = Infinity;
   for (const p of s.players) {
     if (p.stun > 0 || p.action.kind === 'dive' || p.action.kind === 'slide') continue;
     if (p.idx === b.kicker && b.kickCd > 0) continue;
     if (b.z > (p.role === 'gk' ? 2.2 : 1.0)) continue;
-    const r = p.role === 'gk' ? 0.8 : controlRadius(p.stats);
+    const isTarget = b.passTarget === p.idx;
+    // Un passaggio in viaggio: i compagni lo lasciano passare; gli avversari lo prendono
+    // solo se sono proprio sulla linea (raggio piccolo).
+    if (passing && !isTarget && p.team === s.players[b.passTarget].team) continue;
+    let r = p.role === 'gk' ? 0.8 : controlRadius(p.stats);
+    if (isTarget) r += 0.25;
+    else if (passing && p.role === 'field') r = INTERCEPT_RADIUS;
     const d = dist(p.x, p.y, b.x, b.y);
     if (d > r) continue;
     if (p.role === 'gk') {
       if (b.shotActive && b.shotTeam !== p.team) continue; // i tiri li gestisce la parata
       if (Math.abs(p.x - ownGoalX(p.team)) > 6) continue;
     }
-    const dd = b.passTarget === p.idx ? d - 0.3 : d;
+    const dd = isTarget ? d - 0.3 : d;
     if (dd < bd) {
       bd = dd;
       best = p;
     }
   }
   if (!best) return;
-  // Il destinatario di un passaggio controlla sempre; gli altri non riescono a fermare
-  // una palla troppo veloce (rimbalza via).
-  if (best.role === 'field' && b.passTarget !== best.idx && len(b.vx - best.vx, b.vy - best.vy) > controlMaxSpeed(best.stats)) {
-    b.vx = -b.vx * 0.25 + best.vx * 0.5;
-    b.vy = -b.vy * 0.25 + best.vy * 0.5;
+  // Il destinatario controlla sempre. Gli altri non fermano una palla troppo veloce: rimbalza
+  // sul piede (più piano, deviata) e il passaggio è perso.
+  const tooFast = passing ? bs > INTERCEPT_MAX_SPEED : len(b.vx - best.vx, b.vy - best.vy) > controlMaxSpeed(best.stats);
+  if (best.role === 'field' && b.passTarget !== best.idx && tooFast) {
+    const [nx, ny] = norm(b.x - best.x, b.y - best.y);
+    const vn = b.vx * nx + b.vy * ny;
+    // Riflessione sul piede (normale piede→palla), smorzata.
+    b.vx = (b.vx - 2 * Math.min(0, vn) * nx) * 0.45;
+    b.vy = (b.vy - 2 * Math.min(0, vn) * ny) * 0.45;
     b.vz = 1.2;
     b.lastTouch = best.idx;
     b.kicker = best.idx;
@@ -579,6 +637,9 @@ function tryPossession(s: MatchState): void {
   b.shotActive = false;
   b.kicker = -1;
   best.dribble = 0;
+  best.evade = 0;
+  best.lmx = 0;
+  best.lmy = 0;
   if (best.role === 'field') {
     // Si gira verso dove andava (o verso la palla), per ripartire subito.
     const [fx, fy] = norm(best.vx || b.vx, best.vy || b.vy);

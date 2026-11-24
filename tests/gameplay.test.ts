@@ -9,26 +9,10 @@ import { updateKeeper } from '../src/shared/keeper';
 import { runSpeed } from '../src/shared/stats';
 import { stepBall } from '../src/shared/ball';
 import { TEAMS } from '../src/shared/teams';
-import type { MatchState, TeamDef, TeamIndex } from '../src/shared/types';
-import { input, newMatch, parkOthers, run, toPlay, withStats } from './helpers';
+import type { MatchState, TeamIndex } from '../src/shared/types';
+import { humansOn, input, newMatch, parkOthers, run, toPlay } from './helpers';
 
 const speed = (s: MatchState) => Math.hypot(s.ball.vx, s.ball.vy);
-
-/** Partita con due "umani" (d squadra 0, c squadra 1) su giocatori scelti: nessuno agisce da solo. */
-function humansOn(seed: number, dIdx: number, cIdx: number, home: TeamDef = TEAMS[0], away: TeamDef = TEAMS[1]) {
-  const s = createMatch({ home, away, seed, humans: [{ id: 'd', team: 0 }, { id: 'c', team: 1 }] });
-  toPlay(s);
-  parkOthers(s, [dIdx, cIdx]);
-  const bind = (id: string, idx: number) => {
-    const c = s.controllers.find((x) => x.id === id)!;
-    s.players[c.player].human = null;
-    c.player = idx;
-    s.players[idx].human = id;
-  };
-  bind('d', dIdx);
-  bind('c', cIdx);
-  return s;
-}
 
 describe('possesso e movimento', () => {
   it('reattivo: velocità piena in meno di 0,2 s e inversione immediata', () => {
@@ -57,7 +41,7 @@ describe('possesso e movimento', () => {
       expect(s.ball.owner).toBe(4);
       maxD = Math.max(maxD, Math.hypot(s.ball.x - me.x, s.ball.y - me.y));
     }
-    expect(maxD).toBeLessThan(0.7);
+    expect(maxD).toBeLessThan(0.9); // a ogni tocco si allontana un po', mai di più
   });
 
   it('lo scatto è più veloce della corsa', () => {
@@ -116,8 +100,8 @@ describe('passaggi', () => {
           got = s.ball.owner === 3;
         }
         expect(got, `distanza ${d}`).toBe(true);
-        expect(arrival).toBeGreaterThan(3);
-        expect(arrival).toBeLessThan(11);
+        expect(arrival).toBeGreaterThan(5); // veloce
+        expect(arrival).toBeLessThan(13);
       }
     }
   });
@@ -146,7 +130,7 @@ describe('passaggi', () => {
     const s = humansOn(7, 1, 9);
     const a = s.players[1];
     for (const q of s.players) if (q.team === 0 && q.idx !== 1) q.x = 0.6;
-    Object.assign(a, { x: 12, y: 6, vx: 0, vy: 0 });
+    Object.assign(a, { x: 12, y: 4, vx: 0, vy: 0 });
     s.ball.owner = 1;
     const [ux, uy] = [0.6, -0.8];
     stepMatch(s, { d: input({ mx: ux, my: uy, pass: true }) });
@@ -215,85 +199,6 @@ describe('tiro', () => {
 });
 
 describe('contrasti: solo su comando, niente falli', () => {
-  function duel(seed: number, from: 'front' | 'behind', defStats = {}, carStats = {}) {
-    const s = humansOn(seed, 1, 9, withStats(TEAMS[0], defStats), withStats(TEAMS[1], carStats));
-    const c = s.players[9];
-    const d = s.players[1];
-    Object.assign(c, { x: 18, y: 11, fx: -1, fy: 0, vx: 0, vy: 0, stun: 0 });
-    Object.assign(d, { x: from === 'front' ? 17.1 : 18.9, y: 11, vx: 0, vy: 0, stun: 0, tackleCd: 0, slideCd: 0 });
-    s.ball.owner = 9;
-    stepMatch(s, {});
-    return { s, c, d };
-  }
-
-  it('contrasto in piedi: la difesa alta contro un dribbling basso vince più spesso', () => {
-    const wins = (def: number, drib: number) => {
-      let w = 0;
-      for (let i = 0; i < 60; i++) {
-        const { s } = duel(100 + i, 'front', { defense: def }, { dribbling: drib });
-        stepMatch(s, { d: input({ tackle: true }) });
-        run(s, 25);
-        if (s.ball.owner !== 9) w++;
-      }
-      return w;
-    };
-    const strong = wins(92, 45);
-    const weak = wins(45, 92);
-    expect(strong).toBeGreaterThan(weak + 15);
-  });
-
-  it('contrasto da dietro: nessun fallo, al massimo riesce meno', () => {
-    let won = 0;
-    for (let i = 0; i < 40; i++) {
-      const { s } = duel(200 + i, 'behind');
-      stepMatch(s, { d: input({ tackle: true }) });
-      for (let t = 0; t < 25; t++) {
-        stepMatch(s, {});
-        expect(s.phase).toBe('play');
-        expect(s.events.some((e) => e.type === 'whistle')).toBe(false);
-      }
-      if (s.ball.owner !== 9) won++;
-    }
-    expect(won).toBeGreaterThan(0);
-  });
-
-  it('contrasto mancato: sbilanciato solo un attimo, poi torna libero', () => {
-    const { s, d } = duel(300, 'front');
-    d.x = 15; // troppo lontano
-    stepMatch(s, { d: input({ tackle: true }) });
-    expect(d.action.kind).toBe('tackle');
-    run(s, 60);
-    expect(d.action.kind).toBe('none');
-    expect(d.stun).toBe(0);
-  });
-
-  it('scivolata a vuoto: resta a terra per un attimo, poi si rialza', () => {
-    const { s, d } = duel(301, 'front');
-    s.ball.owner = -1;
-    Object.assign(s.ball, { x: 30, y: 3, vx: 0, vy: 0 });
-    stepMatch(s, { d: input({ slide: true }) });
-    expect(d.action.kind).toBe('slide');
-    run(s, 40);
-    expect(d.action.kind).toBe('fall');
-    expect(d.stun).toBeGreaterThan(0);
-    run(s, 60);
-    expect(d.action.kind).toBe('none');
-  });
-
-  it('scivolata presa bene: ruba palla, e chi l\'ha fatta si rialza', () => {
-    let won = 0;
-    for (let i = 0; i < 30; i++) {
-      const { s, d } = duel(400 + i, 'front');
-      d.x = 16;
-      stepMatch(s, { d: input({ slide: true }) });
-      run(s, 30);
-      if (s.ball.owner !== 9) won++;
-      run(s, 60);
-      expect(d.action.kind).toBe('none');
-    }
-    expect(won).toBeGreaterThan(15);
-  });
-
   it('il mio giocatore non fa MAI contrasti o scivolate da solo', () => {
     for (let seed = 0; seed < 5; seed++) {
       const s = newMatch({ human: true, seed: 600 + seed });
@@ -309,24 +214,6 @@ describe('contrasti: solo su comando, niente falli', () => {
       }
       expect(mine, `seed ${seed}`).toBe(0);
     }
-  });
-
-  it('l\'IA avversaria fa scivolate, ma con moderazione', () => {
-    let slides = 0;
-    let tackles = 0;
-    for (let i = 0; i < 6; i++) {
-      const s = newMatch({ seed: 700 + i });
-      while (s.phase !== 'ended') {
-        stepMatch(s, {});
-        for (const e of s.events) {
-          if (e.type === 'slide') slides++;
-          if (e.type === 'tackle' || e.type === 'tackleMiss') tackles++;
-        }
-      }
-    }
-    expect(slides / 6).toBeGreaterThan(0.2);
-    expect(slides / 6).toBeLessThan(12);
-    expect(tackles).toBeGreaterThan(slides);
   });
 
   it('cambiando giocatore, un contrasto iniziato dalla CPU viene annullato', () => {

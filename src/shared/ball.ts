@@ -3,7 +3,8 @@
 import { CENTER_Y, DT, FIELD, PHYS } from './constants';
 import { len } from './math';
 import { randSigned } from './rng';
-import type { MatchState } from './types';
+import { TOUCH, touchPushMult } from './stats';
+import type { MatchState, PlayerState } from './types';
 
 const R = PHYS.ballRadius;
 const HALF_GOAL = FIELD.goalWidth / 2;
@@ -186,21 +187,41 @@ function clampInNet(s: MatchState, left: boolean): void {
 }
 
 /**
- * Palla condotta: incollata ai piedi, con un piccolo tocco ritmico; in scatto sta appena più
- * avanti. Nessun modo di "perderla" da sola: si perde solo con un contrasto.
+ * Distanza palla-corpo durante la conduzione. A ogni tocco la palla si allontana dal piede e
+ * torna: quando è lontana si può rubare, quando è sotto il piede no. Da fermi la palla sta
+ * un po' davanti (contrastabile di fronte); proteggendo resta attaccata, dietro al corpo.
  */
-export function attachBall(s: MatchState, sprinting: boolean): void {
+export function touchOffset(p: PlayerState, phase: number, sprinting: boolean, moving: number): number {
+  if (p.shielding) return TOUCH.shield;
+  const tri = phase < 0.5 ? phase * 2 : 2 - phase * 2;
+  const base = sprinting ? TOUCH.sprintBase : TOUCH.walkBase;
+  const push = (sprinting ? TOUCH.sprintPush : TOUCH.walkPush) * touchPushMult(p.stats);
+  return base + push * tri * moving + (1 - moving) * 0.13;
+}
+
+/** Dove sarà la palla di chi la porta tra `dt` secondi, se continua a correre così. */
+export function predictCarriedBall(p: PlayerState, dt: number): [number, number, number] {
+  const sp = len(p.vx, p.vy);
+  const tl = p.sprinting ? TOUCH.sprintLen : TOUCH.walkLen;
+  const ph = (p.dribble + (sp * dt) / tl) % 1;
+  const off = touchOffset(p, ph, p.sprinting, Math.min(1, sp / 3));
+  const dx = p.shielding ? p.shx : p.fx;
+  const dy = p.shielding ? p.shy : p.fy;
+  return [p.x + p.vx * dt + dx * off, p.y + p.vy * dt + dy * off, off];
+}
+
+/** Palla condotta: segue il ritmo dei tocchi (vedi touchOffset). */
+export function attachBall(s: MatchState): void {
   const b = s.ball;
   const p = s.players[b.owner];
   const sp = len(p.vx, p.vy);
-  const touchLen = sprinting ? 2.2 : 1.5;
+  const touchLen = p.sprinting ? TOUCH.sprintLen : TOUCH.walkLen;
   p.dribble = (p.dribble + (sp * DT) / touchLen) % 1;
-  const ph = p.dribble;
-  const tri = ph < 0.5 ? ph * 2 : 2 - ph * 2;
-  const moving = Math.min(1, sp / 3);
-  const off = (sprinting ? 0.5 : 0.42) + (sprinting ? 0.14 : 0.06) * tri * moving;
-  b.x = p.x + p.fx * off;
-  b.y = p.y + p.fy * off;
+  const off = touchOffset(p, p.dribble, p.sprinting, Math.min(1, sp / 3));
+  const dx = p.shielding ? p.shx : p.fx;
+  const dy = p.shielding ? p.shy : p.fy;
+  b.x = p.x + dx * off;
+  b.y = p.y + dy * off;
   b.z = 0;
   b.vx = p.vx;
   b.vy = p.vy;

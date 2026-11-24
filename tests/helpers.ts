@@ -46,3 +46,19 @@ export function parkOthers(s: MatchState, keep: number[]): void {
     p.stun = 1e6; // fermi per tutto il test
   }
 }
+
+/** Partita con due "umani" (d squadra 0, c squadra 1) su giocatori scelti: nessuno agisce da solo. */
+export function humansOn(seed: number, dIdx: number, cIdx: number, home: TeamDef = TEAMS[0], away: TeamDef = TEAMS[1]) {
+  const s = createMatch({ home, away, seed, humans: [{ id: 'd', team: 0 }, { id: 'c', team: 1 }] });
+  toPlay(s);
+  parkOthers(s, [dIdx, cIdx]);
+  const bind = (id: string, idx: number) => {
+    const c = s.controllers.find((x) => x.id === id)!;
+    s.players[c.player].human = null;
+    c.player = idx;
+    s.players[idx].human = id;
+  };
+  bind('d', dIdx);
+  bind('c', cIdx);
+  return s;
+}

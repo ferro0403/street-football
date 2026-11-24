@@ -88,6 +88,14 @@ export interface AiMemory {
   ty: number;
   /** Secondi da cui il giocatore non si muove (guardia anti-blocco). */
   still: number;
+  /** Difensore CPU: secondi alla partenza del contrasto già deciso (segnale visibile). */
+  windup: number;
+  /** Difensore CPU: attesa prima di poter tentare un altro contrasto. */
+  tackleWait: number;
+  /** Portatore CPU: da quanto è pressato da vicino (s): oltre un certo tempo scarica la palla. */
+  pressed: number;
+  /** Portatore CPU: tra quanto fa il dribbling secco per evitare il contrasto (0 = nessuno). */
+  cut: number;
 }
 
 export interface KeeperMemory {
@@ -122,8 +130,21 @@ export interface PlayerState {
   /** Carica del tiro (0..1) mentre si tiene premuto. */
   charge: number;
   charging: boolean;
-  /** Fase del tocco di palla (solo grafica e ritmo del dribbling). */
+  /** Fase del tocco di palla: a ogni tocco la palla si allontana un po' dal piede. */
   dribble: number;
+  /** Sta scattando in questo momento (serve a prevedere il tocco). */
+  sprinting: boolean;
+  /** Protezione palla attiva (corpo tra palla e difensore). */
+  shielding: boolean;
+  /** Lato della palla durante la protezione (direzione normalizzata dal corpo alla palla). */
+  shx: number;
+  shy: number;
+  /** Finestra di schivata dopo un cambio di direzione brusco o uno scatto (s). */
+  evade: number;
+  evadeCd: number;
+  /** Ultima direzione di corsa voluta (per riconoscere i cambi di direzione bruschi). */
+  lmx: number;
+  lmy: number;
   /** ID del controller umano che lo guida, null = CPU. */
   human: string | null;
   ai: AiMemory;
@@ -168,6 +189,8 @@ export interface PlayerInput {
   tackle: boolean;
   /** Senza palla: scivolata. */
   slide: boolean;
+  /** Con palla: protezione (tenuto premuto). */
+  shield: boolean;
   /** Cambio giocatore. */
   switch: boolean;
 }
@@ -194,7 +217,10 @@ export type MatchEventType =
   | 'catch'
   | 'dive'
   | 'tackle'
-  | 'tackleMiss'
+  | 'tackleMiss' // contrasto a vuoto: difensore sbilanciato
+  | 'tackleLoose' // contrasto 50/50: palla che schizza libera
+  | 'dodge' // l'attaccante ha evitato il contrasto con un cambio di direzione
+  | 'windup' // un difensore CPU sta per entrare (segnale per chi ha palla)
   | 'slide'
   | 'whistle'
   | 'kickoff'
@@ -237,8 +263,10 @@ export interface TeamMeta {
 export interface Tuning {
   /** Velocità dei giocatori (moltiplicatore). */
   speed: number;
-  /** Forza del contrasto (moltiplicatore della probabilità di riuscita). */
+  /** Forza del contrasto: allunga la portata del piede e allarga la finestra utile. */
   tackle: number;
+  /** Aggressività dei difensori CPU: quanto spesso e quanto presto entrano. */
+  aggression: number;
   /** Potenza dei passaggi (velocità di arrivo al compagno). */
   pass: number;
   /** Potenza dei tiri. */

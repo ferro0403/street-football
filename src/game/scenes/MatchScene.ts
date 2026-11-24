@@ -4,7 +4,7 @@ import Phaser from 'phaser';
 import { createMatch, stepMatch } from '../../shared/match';
 import { DT, FIELD } from '../../shared/constants';
 import { teamById } from '../../shared/teams';
-import { passTargetInDir, shotAim, shotTarget } from '../../shared/actions';
+import { choosePass, shotAim, shotTarget } from '../../shared/actions';
 import { attackDir } from '../../shared/world';
 import type { MatchEvent, MatchState, PlayerInput, PlayerState } from '../../shared/types';
 import { isoDepth, isoX, isoY, screenToWorldDir, worldToScreenDir } from '../iso';
@@ -222,6 +222,7 @@ export class MatchScene extends Phaser.Scene {
       shoot: si.shoot,
       tackle: si.tackle,
       slide: si.slide,
+      shield: si.shield,
       switch: si.switch,
     };
     this.lastInput = inp;
@@ -339,6 +340,21 @@ export class MatchScene extends Phaser.Scene {
       case 'tackleMiss':
         this.puff(e.x, e.y, 4);
         break;
+      case 'tackleLoose':
+        sfx.tackle();
+        this.addTrauma(0.1);
+        this.puff(e.x, e.y, 8);
+        break;
+      case 'dodge':
+        sfx.whoosh();
+        this.puff(e.x, e.y, 5);
+        break;
+      case 'windup': {
+        // Avviso solo se sta entrando su di me.
+        const me = s.controllers.find((k) => k.id === LOCAL_ID)?.player ?? -1;
+        if (me >= 0 && s.ball.owner === me) sfx.warn();
+        break;
+      }
       case 'save':
         sfx.save();
         this.addTrauma(0.3);
@@ -453,21 +469,42 @@ export class MatchScene extends Phaser.Scene {
     const v = this.views[c.player];
     const x = v.ps.container.x;
     const y = v.ps.container.y;
-    this.ring.setVisible(true).setPosition(x, y);
+    this.ring.setVisible(true).setPosition(x, y).setTint(p.shielding ? 0xffb14d : 0xffd21f);
     this.arrow.setVisible(true).setPosition(x, y - FIG_H - 8 + Math.sin(this.time.now / 140) * 2);
+    this.drawWarnings(o);
     if (s.ball.owner !== p.idx) return;
+    if (p.shielding) {
+      // Protezione: arco dalla parte della palla (il corpo fa da scudo).
+      const [sx, sy] = worldToScreenDir(p.shx, p.shy);
+      const a = Math.atan2(sy, sx);
+      o.lineStyle(4, 0xffb14d, 0.85).beginPath().arc(x, y - 4, 22, a - 1.1, a + 1.1).strokePath();
+    }
 
     const inp = this.lastInput;
     const mx = inp?.mx ?? 0;
     const my = inp?.my ?? 0;
     const hasDir = Math.hypot(mx, my) > 0.2;
 
-    // Compagno che riceverebbe il passaggio adesso.
+    // A chi andrebbe il passaggio adesso: linea tratteggiata e anello sul compagno
+    // (o freccia verso il muro, se lo punti di proposito).
     if (!p.charging) {
-      const t = passTargetInDir(s, p, hasDir ? mx : p.fx, hasDir ? my : p.fy);
-      if (t >= 0) {
-        const tv = this.views[t];
-        this.targetRing.setVisible(true).setPosition(tv.ps.container.x, tv.ps.container.y).setAlpha(0.8);
+      const ch = choosePass(s, p, hasDir ? mx : 0, hasDir ? my : 0);
+      const bx = isoX(s.ball.x, s.ball.y);
+      const by = isoY(s.ball.x, s.ball.y);
+      if (ch.target >= 0) {
+        const tv = this.views[ch.target];
+        const tx = tv.ps.container.x;
+        const ty = tv.ps.container.y;
+        this.targetRing.setVisible(true).setPosition(tx, ty).setAlpha(0.9);
+        this.dashed(o, bx, by, tx, ty, 0x2ec4b6, 0.7);
+      } else {
+        const ex = isoX(s.ball.x + ch.wx * 3, s.ball.y + ch.wy * 3);
+        const ey = isoY(s.ball.x + ch.wx * 3, s.ball.y + ch.wy * 3);
+        this.dashed(o, bx, by, ex, ey, 0xffffff, 0.6);
+        const [ax, ay] = [ex - bx, ey - by];
+        const l = Math.hypot(ax, ay) || 1;
+        const [ux, uy] = [ax / l, ay / l];
+        o.fillStyle(0xffffff, 0.7).fillTriangle(ex + ux * 8, ey + uy * 8, ex - uy * 6, ey + ux * 6, ex + uy * 6, ey - ux * 6);
       }
     }
 
@@ -502,6 +539,32 @@ export class MatchScene extends Phaser.Scene {
       const r = 7 + (1 - p.charge) * 5;
       o.lineStyle(2, col, 1).strokeCircle(tx, ty, r);
       o.lineBetween(tx - r - 4, ty, tx + r + 4, ty).lineBetween(tx, ty - r - 4, tx, ty + r + 4);
+    }
+  }
+
+  /** Linea tratteggiata sullo schermo. */
+  private dashed(o: Phaser.GameObjects.Graphics, x1: number, y1: number, x2: number, y2: number, col: number, alpha: number): void {
+    const l = Math.hypot(x2 - x1, y2 - y1);
+    const n = Math.max(2, Math.floor(l / 10));
+    o.lineStyle(2, col, alpha);
+    for (let i = 0; i < n; i += 2) {
+      const a = i / n;
+      const b = Math.min(1, (i + 1) / n);
+      o.lineBetween(x1 + (x2 - x1) * a, y1 + (y2 - y1) * a, x1 + (x2 - x1) * b, y1 + (y2 - y1) * b);
+    }
+  }
+
+  /** Segnale sopra i difensori CPU che stanno per entrare: "!" arancione che lampeggia. */
+  private drawWarnings(o: Phaser.GameObjects.Graphics): void {
+    for (const q of this.state.players) {
+      if (q.ai.windup <= 0 || q.human) continue;
+      const v = this.views[q.idx];
+      const x = v.ps.container.x;
+      const y = v.ps.container.y - FIG_H - 14;
+      const blink = Math.floor(this.time.now / 70) % 2 === 0;
+      o.fillStyle(0x0d0b14, 0.85).fillCircle(x, y, 9);
+      o.fillStyle(blink ? 0xffb14d : 0xff4d6d, 1).fillCircle(x, y, 7);
+      o.fillStyle(0xffffff, 1).fillRect(x - 1.5, y - 5, 3, 6).fillRect(x - 1.5, y + 2.5, 3, 2.5);
     }
   }
 

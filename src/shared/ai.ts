@@ -9,8 +9,9 @@
 // - Guardia anti-blocco: chi resta fermo troppo a lungo rifà subito la scelta.
 import { CENTER_Y, DT, FIELD } from './constants';
 import { clamp, dist, norm } from './math';
-import { chance, nextRandom, randSigned } from './rng';
-import { pass, passValue, shoot, startSlide, startTackle } from './actions';
+import { chance, nextRandom } from './rng';
+import { pass, passValue, predictSlide, predictTackle, shoot, startSlide, startTackle } from './actions';
+import { AI_TACKLE_WAIT, aiTackleReaction } from './stats';
 import type { MatchState, PlayerState } from './types';
 import { attackDir, keeperOf, laneClear, nearestOpponent, oppGoalX, openness, ownGoalX } from './world';
 
@@ -18,6 +19,8 @@ export interface Intent {
   mx: number;
   my: number;
   sprint: boolean;
+  /** Con palla: protezione. */
+  shield?: boolean;
 }
 
 const STAND: Intent = { mx: 0, my: 0, sprint: false };
@@ -43,13 +46,19 @@ function seek(p: PlayerState, tx: number, ty: number, sprintDist = 4): Intent {
 }
 
 export function aiFieldPlayer(s: MatchState, p: PlayerState): Intent {
-  if (s.phase !== 'play' || p.stun > 0) return STAND;
+  if (p.ai.tackleWait > 0) p.ai.tackleWait = Math.max(0, p.ai.tackleWait - DT);
+  if (s.phase !== 'play' || p.stun > 0) {
+    p.ai.windup = 0;
+    return STAND;
+  }
   const b = s.ball;
   if (b.owner === p.idx) return carrier(s, p);
   if (b.owner < 0) {
     if (b.passTarget === p.idx) return receive(s, p);
     const passTeam = b.passTarget >= 0 ? s.players[b.passTarget].team : -1;
-    if (passTeam !== p.team && isChaser(s, p)) return chase(s, p);
+    // Un passaggio avversario in viaggio non si insegue: si resta in marcatura (l'intercetto
+    // avviene solo se uno è già sulla linea). Si insegue solo la palla davvero vagante.
+    if (passTeam < 0 && isChaser(s, p)) return chase(s, p);
     return passTeam === p.team ? support(s, p) : defend(s, p);
   }
   return s.players[b.owner].team === p.team ? support(s, p) : defend(s, p);
@@ -63,23 +72,48 @@ function carrier(s: MatchState, p: PlayerState): Intent {
   const dGoal = dist(p.x, p.y, gx, CENTER_Y);
   const opp = nearestOpponent(s, p, false);
   const pressured = opp.d < 2;
+  p.ai.pressed = pressured ? p.ai.pressed + DT : Math.max(0, p.ai.pressed - DT * 2);
+  // Vicino a un muro: la palla rischia di restare intrappolata.
+  const nearWall = Math.min(p.x, FIELD.length - p.x, p.y, FIELD.width - p.y) < 2;
+
+  // Dribbling secco deciso quando un difensore ha caricato il contrasto (vedi press).
+  if (p.ai.cut > 0) {
+    p.ai.cut -= DT;
+    if (p.ai.cut <= 0 && opp.p) {
+      p.ai.cut = 0;
+      const [vx, vy] = norm(p.vx || p.fx, p.vy || p.fy);
+      // Perpendicolare alla corsa, dalla parte opposta al difensore.
+      const side = (opp.p.x - p.x) * -vy + (opp.p.y - p.y) * vx > 0 ? -1 : 1;
+      p.ai.tx = clamp(p.x - vy * side * 3 + dir * 0.5, 1, FIELD.length - 1);
+      p.ai.ty = clamp(p.y + vx * side * 3, 1, FIELD.width - 1);
+      p.ai.think = 0.4;
+    }
+  }
 
   if (thinkDue(s, p, 0.2)) {
-    // 1) Tiro.
+    // 1) Tiro: verso l'angolo con la linea libera (il difensore che contiene sta sulla linea
+    //    centrale: bisogna aprirsi l'angolo).
     const range = 7 + (p.stats.shooting / 99) * 7;
     const angleOk = Math.abs(p.y - CENTER_Y) < Math.abs(gx - p.x) * 1.1 + 1;
     if (dGoal < range && angleOk) {
-      const clear = laneClear(s, p.team, p.x, p.y, gx, CENTER_Y, 0.8, true);
-      const quality = (1 - dGoal / range) * (clear ? 1 : 0.4) * (pressured ? 0.8 : 1);
-      // Con un avversario attaccato davanti il tiro verrebbe murato: meglio dribblare o passare.
-      const blocked = !clear && opp.d < 2.5;
-      if (!blocked && (quality > 0.3 || (clear && dGoal < 6) || chance(s, quality * 0.5))) {
-        const k = keeperOf(s, p.team === 0 ? 1 : 0);
-        const side = k.y < CENTER_Y ? 1 : -1;
-        const aim = chance(s, 0.75) ? side * (0.4 + nextRandom(s) * 0.6) : randSigned(s) * 0.5;
+      const k = keeperOf(s, p.team === 0 ? 1 : 0);
+      const first = k.y < CENTER_Y ? 1 : -1;
+      let aim = 0;
+      let open = false;
+      for (const side of [first, -first]) {
+        if (laneClear(s, p.team, p.x, p.y, gx, CENTER_Y + side * FIELD.goalWidth * 0.33, 0.45, true)) {
+          aim = side * (0.5 + nextRandom(s) * 0.45);
+          open = true;
+          break;
+        }
+      }
+      const quality = (1 - dGoal / range) * (open ? 1 : 0.3);
+      if (open && (quality > 0.25 || dGoal < 7 || chance(s, 0.35))) {
         shoot(s, p, clamp(0.3 + dGoal / 20 + nextRandom(s) * 0.3, 0.2, 1), aim);
         return STAND;
       }
+      // Chiuso: dribbling secco di lato per aprirsi l'angolo.
+      if (!open && pressured && p.ai.cut <= 0 && chance(s, 0.25)) p.ai.cut = DT;
     }
     // 2) Passaggio: se pressato, o se un compagno è messo molto meglio.
     let best: PlayerState | null = null;
@@ -93,7 +127,10 @@ function carrier(s: MatchState, p: PlayerState): Intent {
       }
     }
     const selfV = openness(s, p.team, p.x, p.y) * 0.7 + (dGoal < 12 ? 1.5 : 0);
-    if (best && bv > selfV + (pressured ? -0.5 : 2) && (pressured || chance(s, 0.5))) {
+    // Pressato da troppo tempo (o chiuso contro il muro): scarica al compagno migliore.
+    const stuck = p.ai.pressed > 1.2 || (nearWall && pressured);
+    if (best && (stuck || (bv > selfV + (pressured ? -0.5 : 2) && (pressured || chance(s, 0.5))))) {
+      p.ai.pressed = 0;
       pass(s, p, best.idx);
       return STAND;
     }
@@ -111,6 +148,12 @@ function carrier(s: MatchState, p: PlayerState): Intent {
       tx = p.x + (tx - p.x) * 0.5 + ax * w + dir * 1.5;
       ty = p.y + (ty - p.y) * 0.5 + ay * w;
     }
+    // Lontano dai muri: verso il centro del campo.
+    const m = 3;
+    if (p.x < m) tx += (m - p.x) * 2;
+    if (p.x > FIELD.length - m) tx -= (p.x - FIELD.length + m) * 2;
+    if (p.y < m) ty += (m - p.y) * 2;
+    if (p.y > FIELD.width - m) ty -= (p.y - FIELD.width + m) * 2;
     p.ai.tx = clamp(tx, 1, FIELD.length - 1);
     p.ai.ty = clamp(ty, 1, FIELD.width - 1);
   }
@@ -203,13 +246,14 @@ function predictBall(s: MatchState, t: number): [number, number] {
   return [clamp(b.x + b.vx * t, 0.5, FIELD.length - 0.5), clamp(b.y + b.vy * t, 0.5, FIELD.width - 0.5)];
 }
 
-/** Il passaggio è per me: vado incontro alla palla. */
+/** Il passaggio è per me: non scappo, vado incontro alla palla (al passo). */
 function receive(s: MatchState, p: PlayerState): Intent {
   const b = s.ball;
   const d = dist(p.x, p.y, b.x, b.y);
-  const sp = Math.sqrt(b.vx * b.vx + b.vy * b.vy) + 0.1;
-  const [tx, ty] = predictBall(s, Math.min(0.5, d / sp));
-  return seek(p, tx, ty, 3);
+  if (d < 0.3) return { ...STAND };
+  const [mx, my] = norm(b.x - p.x, b.y - p.y);
+  const k = d < 1.5 ? 1 : 0.55;
+  return { mx: mx * k, my: my * k, sprint: false };
 }
 
 /** Inseguo la palla vagante se sono il più vicino della squadra (gli umani contano). */
@@ -256,28 +300,8 @@ function defend(s: MatchState, p: PlayerState): Intent {
     }
   }
 
-  if (presser === p && c) {
-    const [gdx, gdy] = norm(gx - c.x, CENTER_Y - c.y);
-    // Se ci sta già un umano, copre lo spazio alle sue spalle invece di raddoppiare.
-    const back = humanD < pd - 0.5 ? 3 : 0.9;
-    const tx = c.x + c.vx * 0.25 + gdx * back;
-    const ty = c.y + c.vy * 0.25 + gdy * back;
-    const d = dist(p.x, p.y, c.x, c.y);
-    if (back < 2 && c.role !== 'gk' && thinkDue(s, p, 0.18)) {
-      const [rx, ry] = norm(p.x - c.x, p.y - c.y);
-      const front = rx * c.fx + ry * c.fy;
-      if (d < 1.5 && p.tackleCd <= 0 && chance(s, 0.3 + p.stats.defense * 0.003 + (front > 0.3 ? 0.1 : 0))) {
-        startTackle(s, p);
-        return STAND;
-      }
-      // Scivolata con moderazione: solo se l'attaccante sta scappando ed è vicino.
-      if (d > 1.6 && d < 3 && p.slideCd <= 0 && front < 0 && chance(s, 0.05)) {
-        startSlide(s, p);
-        return STAND;
-      }
-    }
-    return seek(p, tx, ty, 2.5);
-  }
+  if (presser === p && c) return press(s, p, c, humanD < pd - 0.5);
+  p.ai.windup = 0;
 
   // Marcatura: ognuno prende l'attaccante libero più vicino (ordine stabile per indice).
   const attackers = s.players.filter((q) => q.team !== team && q.role === 'field' && q.idx !== b.owner);
@@ -314,4 +338,81 @@ function defend(s: MatchState, p: PlayerState): Intent {
   }
   // Nessuno da marcare: copre davanti alla porta, verso il lato della palla.
   return seek(p, gx + attackDir(team) * 6, CENTER_Y + (b.y - CENTER_Y) * 0.4, 4);
+}
+
+// --- Pressing sul portatore: contenere, aspettare, entrare -----------------------------------
+
+/** Distanza di contenimento davanti all'attaccante (m). */
+const JOCKEY_DIST = 1.25;
+/** Dopo una scivolata la CPU non ne fa un'altra per un bel po' (s). */
+const AI_SLIDE_REST = 9;
+
+/**
+ * Il difensore CPU sta DAVANTI all'attaccante (tra lui e la porta) e lo accompagna. Entra solo
+ * quando prevede che il contrasto riesca (palla lontana dal piede dopo un tocco, corpo che
+ * non copre, nessun dribbling in corso). Prima di entrare carica per un attimo: segnale
+ * visibile per chi ha palla. Dopo ogni tentativo aspetta 1,5-2,5 s (meno se più aggressivo).
+ */
+function press(s: MatchState, p: PlayerState, c: PlayerState, cover: boolean): Intent {
+  const gx = ownGoalX(p.team);
+  const aggr = s.tune.aggression;
+  const d = dist(p.x, p.y, c.x, c.y);
+
+  if (p.ai.windup > 0) {
+    p.ai.windup -= DT;
+    if (p.ai.windup <= 0) {
+      p.ai.windup = 0;
+      startTackle(s, p);
+      return STAND;
+    }
+  }
+
+  // Dove stare: davanti, sulla linea verso la porta; se protegge palla, girargli intorno.
+  const [gdx, gdy] = norm(gx - c.x, CENTER_Y - c.y);
+  const jd = cover ? 3 : JOCKEY_DIST / (0.85 + 0.15 * aggr);
+  let tx = c.x + c.vx * 0.2 + gdx * jd;
+  let ty = c.y + c.vy * 0.2 + gdy * jd;
+  if (c.shielding && !cover) {
+    tx = c.x + c.shx * 1.05;
+    ty = c.y + c.shy * 1.05;
+  }
+
+  if (!cover && p.ai.windup <= 0 && p.ai.tackleWait <= 0 && c.role !== 'gk' && d < 2.4 && p.tackleCd <= 0) {
+    const react = aiTackleReaction(p.stats) / Math.sqrt(aggr);
+    // Più aggressivo = entra anche quando la palla è appena al limite del piede.
+    const out = predictTackle(s, p, c, react, (aggr - 1) * 0.12);
+    if (out === 'steal') {
+      p.ai.windup = react;
+      p.ai.tackleWait = react + tackleWait(s, aggr);
+      s.events.push({ type: 'windup', p: p.idx, team: p.team, x: p.x, y: p.y });
+      // Un portatore CPU bravo nel dribbling a volte lo legge e cambia direzione all'ultimo.
+      if (!c.human && chance(s, 0.12 + (c.stats.dribbling / 99) * 0.33)) c.ai.cut = Math.max(DT, react - 0.12);
+    } else if (
+      p.slideCd <= 0 &&
+      d > 1.6 &&
+      d < 3 &&
+      Math.abs(c.x - gx) < 14 && // solo quando è pericoloso
+      (p.x - c.x) * gdx + (p.y - c.y) * gdy < 0.3
+    ) {
+      // Scivolata solo se l'attaccante gli è scappato (non è più davanti a lui) e la palla
+      // è raggiungibile senza passare dal corpo.
+      const so = predictSlide(s, p, c, 0.2);
+      if (so === 'steal') {
+        startSlide(s, p);
+        p.slideCd = AI_SLIDE_REST; // con moderazione: poi a lungo niente scivolate
+        p.ai.tackleWait = tackleWait(s, aggr);
+        return STAND;
+      }
+    }
+  }
+
+  const it = seek(p, tx, ty, 3);
+  // Vicino all'attaccante non scatta: lo accompagna (mai fermo se lui si muove).
+  if (d < 2.5) it.sprint = false;
+  return it;
+}
+
+/** Attesa tra due tentativi: 1,5-2,5 s, meno se la difesa è più aggressiva. */
+function tackleWait(s: MatchState, aggr: number): number {
+  return (AI_TACKLE_WAIT[0] + nextRandom(s) * (AI_TACKLE_WAIT[1] - AI_TACKLE_WAIT[0])) / aggr;
 }

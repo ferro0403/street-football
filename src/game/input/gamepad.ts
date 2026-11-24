@@ -18,7 +18,7 @@ export const PAD = {
   Y: 3, // Y / Triangolo → scivolata
   LB: 4, // cambio giocatore
   RB: 5, // scatto (alternativa)
-  LT: 6, // (libero)
+  LT: 6, // protezione palla (tenuto premuto)
   RT: 7, // scatto
   SELECT: 8,
   START: 9,

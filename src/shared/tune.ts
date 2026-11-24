@@ -2,11 +2,12 @@
 // partita: la simulazione resta deterministica (un server potrà usare gli stessi valori).
 import type { Tuning } from './types';
 
-export const DEFAULT_TUNE: Tuning = { speed: 1, tackle: 1, pass: 1, shot: 1 };
+export const DEFAULT_TUNE: Tuning = { speed: 1, tackle: 1, aggression: 1, pass: 1, shot: 1 };
 
 export const TUNE_INFO: { key: keyof Tuning; label: string; min: number; max: number; step: number }[] = [
   { key: 'speed', label: 'Velocità giocatori', min: 0.6, max: 1.5, step: 0.05 },
-  { key: 'tackle', label: 'Forza del contrasto', min: 0.3, max: 2, step: 0.05 },
+  { key: 'tackle', label: 'Forza del contrasto', min: 0.5, max: 1.6, step: 0.05 },
+  { key: 'aggression', label: 'Aggressività difesa CPU', min: 0.3, max: 2, step: 0.05 },
   { key: 'pass', label: 'Potenza passaggi', min: 0.5, max: 2, step: 0.05 },
   { key: 'shot', label: 'Potenza tiri', min: 0.6, max: 1.5, step: 0.05 },
 ];
