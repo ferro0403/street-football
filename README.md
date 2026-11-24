@@ -1,1 +1,52 @@
-# street-football
+# Street Cage
+
+Calcio di strada 5 contro 5 in gabbia, isometrico con grafica retro, nel browser.
+Phaser 3 + Vite + TypeScript.
+
+## Comandi rapidi
+
+```bash
+npm install
+npm run dev      # gioco su http://localhost:5173 (anche dal telefono nella stessa rete)
+npm test         # test della logica di gioco
+npm run build    # build di produzione in dist/
+```
+
+Simulare partite CPU contro CPU senza grafica (bilanciamento):
+
+```bash
+npx tsx scripts/sim.ts 10
+```
+
+## Struttura
+
+- `src/shared/`: **logica di gioco senza Phaser**. Passo fisso a 60 Hz, deterministica
+  (RNG con seme nello stato, solo `+ - * /` e `Math.sqrt`), input per ID giocatore,
+  stato JSON puro. È pensata per girare identica su un server Node (fase online).
+  - `match.ts`: ciclo della partita, controller umani, cambio giocatore, gol, timer
+  - `ball.ts`: fisica della palla (gravità, rimbalzi, attrito, pareti, pali, reti)
+  - `actions.ts`: tiro, passaggio, contrasto, finta, skill speciali
+  - `ai.ts`: IA di compagni e avversari · `keeper.ts`: portiere CPU
+  - `stats.ts`: come le statistiche diventano numeri di gioco (tutto il bilanciamento)
+  - `teams.ts`: squadre di prova (nomi inventati)
+- `src/game/`: client Phaser (disegno isometrico, input, HUD, effetti, replay).
+- `tests/`: test Vitest della logica condivisa.
+
+## Comandi di gioco
+
+| Azione | Tastiera | Controller | Touch |
+|---|---|---|---|
+| Movimento | WASD / frecce | levetta sinistra / croce | joystick a sinistra |
+| Passaggio (tieni = lancio) | J (o Z) | A / Croce | PASSA |
+| Tiro (tieni = più forte e alto) | K (o X) | B / Cerchio | TIRA |
+| Scatto | Shift / Spazio | RB / RT | SCATTO |
+| Finta | L (o C) | X / Quadrato | FINTA |
+| Skill speciale | I (o V) | Y / Triangolo | SKILL |
+| Cambio giocatore | Q | LB | PASSA senza palla |
+| Pausa | Esc / P | Start | II in alto |
+
+Senza palla: TIRO = contrasto, PASSAGGIO = cambio giocatore.
+
+## Pubblicazione
+
+`netlify.toml` è pronto: build `npm run build`, cartella `dist`.
