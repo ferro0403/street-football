@@ -2,7 +2,7 @@
 // Si usa con mouse/dito, tastiera (frecce + Invio/J) e controller (croce + A).
 import Phaser from 'phaser';
 import { TEAMS } from '../../shared/teams';
-import { overall, SKILL_LABELS } from '../../shared/stats';
+import { overall } from '../../shared/stats';
 import { COLORS, button, hexColor, restartOnResize, safeInsets, text, view } from '../ui';
 import { InputManager, isTouchDevice } from '../input/InputManager';
 import { MenuNav } from '../input/MenuNav';
@@ -146,7 +146,7 @@ export class MenuScene extends Phaser.Scene {
   private teamLine(i: number): string {
     const t = TEAMS[i];
     const ovr = Math.round(t.players.reduce((a, p) => a + overall(p.stats, p.role), 0) / t.players.length);
-    return `${t.name.toUpperCase()} · ${ovr} · ${SKILL_LABELS[t.style].toUpperCase()}`;
+    return `${t.name.toUpperCase()} · ${ovr}`;
   }
 
   private refresh(): void {
@@ -213,22 +213,22 @@ export class MenuScene extends Phaser.Scene {
       'AZIONE          TASTIERA     CONTROLLER',
       'Movimento       WASD/frecce  levetta sx',
       'Passaggio       J  (Z)       A / Croce',
-      'Lancio alto     U  (C)       X / Quadrato',
-      'Filtrante       O  (V)       Y / Triangolo',
       'Tiro (tieni)    K  (X)       B / Cerchio',
-      'Scatto          Shift        RT / R2',
-      'Finta           L  (B)       LT / L2',
-      'Skill speciale  I  (N)       RB / R1',
+      'Contrasto       L  (C)       X / Quadrato',
+      'Scivolata       U  (V)       Y / Triangolo',
+      'Proteggi palla  I  (B)       LT / L2',
+      'Scatto          Shift        RT / RB',
       'Cambio giocat.  Q            LB / L1',
       'Pausa           Esc / P      Start',
+      'Debug           F2',
       '',
-      'SENZA PALLA',
-      'Tiro = contrasto in piedi  Lancio = scivolata',
-      'Passaggio = cambio giocatore',
-      'Da dietro e fallo! Di lato e una spallata.',
-      '',
-      'Passaggio: piu tieni, piu e teso (arriva sempre).',
-      'Tiro: mira con la levetta verso un angolo = a giro.',
+      'Passaggio: un tocco, al compagno verso cui punti.',
+      'Senza palla, Passaggio = cambio giocatore.',
+      'Tiro: tieni premuto per piu potenza, mira con la levetta.',
+      'Contrasto: entra quando la palla si stacca dal piede.',
+      'Da dietro non si ruba. "!" = sta per entrare:',
+      'cambia direzione o scatta per saltarlo.',
+      'Telefono: trascina CONTRASTO = scivolata.',
     ]);
   }
 

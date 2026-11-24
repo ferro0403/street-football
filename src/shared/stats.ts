@@ -1,4 +1,5 @@
 // Come le statistiche (1-99) diventano numeri di gioco. Tutto il bilanciamento è qui.
+// Passo 1: arcade e reattivo come FIFA Street. Pochi numeri, facili da regolare.
 import type { PlayerStats, Role, SpecialSkill } from './types';
 
 export function overall(stats: PlayerStats, role: Role): number {
@@ -17,102 +18,130 @@ export function overall(stats: PlayerStats, role: Role): number {
 
 const n = (v: number) => v / 99;
 
-// --- Corsa ------------------------------------------------------------------------
-/** Velocità massima di corsa (m/s). */
-export const runSpeed = (s: PlayerStats) => 5.2 + n(s.speed) * 2.6;
-export const SPRINT_MULT = 1.32;
-/** Quanto rallenta quando conduce palla (moltiplicatore). */
-export const dribbleSpeedMult = (s: PlayerStats) => 0.82 + n(s.dribbling) * 0.14;
-/** Accelerazione verso la velocità desiderata (1/s). */
-export const acceleration = (s: PlayerStats) => 7 + n(s.speed) * 5;
-/** Quanto velocemente cambia direzione (1/s). */
-export const turnRate = (s: PlayerStats, hasBall: boolean) => (hasBall ? 5 + n(s.dribbling) * 9 : 14);
-
-// --- Palleggio --------------------------------------------------------------------
-/** Distanza minima palla-piedi (m). */
-export const DRIBBLE_BASE = 0.42;
-/** Ampiezza del "tocco" a corsa normale: la palla resta vicina. */
-export const dribbleAmpWalk = (s: PlayerStats) => 0.1 + (1 - n(s.dribbling)) * 0.16;
-/** Ampiezza in scatto: la palla si allunga, di più per chi dribbla male. */
-export const dribbleAmpSprint = (s: PlayerStats) => 0.45 + (1 - n(s.dribbling)) * 0.8;
-/** Oltre questa distanza dai piedi la palla è "scoperta" e un avversario può soffiarla. */
-export const EXPOSED_OFFSET = 0.8;
-/** Probabilità (per cambio brusco di direzione) di perdere il controllo. */
-export const turnLossChance = (s: PlayerStats, sprinting: boolean) =>
-  sprinting ? 0.06 + (1 - n(s.dribbling)) * 0.5 : 0.01 + (1 - n(s.dribbling)) * 0.12;
-/** Probabilità per tick di soffiare una palla scoperta. */
-export const stealChance = (def: PlayerStats, carrier: PlayerStats) =>
-  Math.max(0.02, 0.07 + (def.defense - carrier.dribbling) * 0.0018);
-
-// --- Tiro ----------------------------------------------------------------------------
-/** Velocità orizzontale di un tiro a potenza piena (m/s). */
-export const maxShotSpeed = (s: PlayerStats) => 17 + n(s.shooting) * 13;
-/** Errore laterale base del tiro (metri), prima di potenza/distanza. */
-export const shotError = (s: PlayerStats) => 0.12 + (1 - n(s.shooting)) * 1.1;
-/** Effetto massimo a giro (m/s² di accelerazione laterale). */
-export const maxCurl = (s: PlayerStats) => 4 + n(s.shooting) * 6;
+// --- Movimento: reattivo, niente inerzia "pesante" -----------------------------------
+/** Velocità di corsa (m/s). */
+export const runSpeed = (s: PlayerStats) => 5.6 + n(s.speed) * 2.4;
+/** Scatto: molto più veloce della corsa. */
+export const SPRINT_MULT = 1.38;
+/** Con la palla si va quasi alla stessa velocità (palla incollata ai piedi). */
+export const dribbleSpeedMult = (s: PlayerStats) => 0.9 + n(s.dribbling) * 0.08;
+/** Accelerazione (1/s): con 18+ la velocità piena arriva in ~0,1 s. */
+export const acceleration = (s: PlayerStats) => 18 + n(s.speed) * 8;
+/** Rotazione dello sguardo (1/s): cambi di direzione immediati. */
+export const TURN_RATE = 30;
 
 // --- Passaggio ------------------------------------------------------------------------
-/** Errore angolare del passaggio (radianti circa): piccolo, il rasoterra deve arrivare. */
-export const passError = (s: PlayerStats) => 0.01 + (1 - n(s.passing)) * 0.07;
-/** Velocità con cui il rasoterra arriva al compagno: tocco breve → carica piena. */
-export const passArrivalSpeed = (s: PlayerStats, charge: number) => 5 + charge * (5 + n(s.passing) * 3);
+/** Velocità con cui il rasoterra arriva al compagno (m/s): veloce e diretto. */
+export const PASS_ARRIVAL = 8.5;
+/** Oltre questa velocità un passaggio non si intercetta: rimbalza sul piede (m/s). */
+export const INTERCEPT_MAX_SPEED = 10;
+/** Distanza dalla linea entro cui un avversario intercetta un passaggio (m). */
+export const INTERCEPT_RADIUS = 0.38;
+/** Errore angolare massimo (radianti circa): minimo, il passaggio deve arrivare. */
+export const passError = (s: PlayerStats) => (1 - n(s.passing)) * 0.03;
+/** Passaggio "nel vuoto" (nessun compagno in quella direzione): velocità fissa. */
+export const FREE_PASS_SPEED = 14;
 
-// --- Controllo palla ----------------------------------------------------------------------
-/** Raggio entro cui controlla una palla vagante (m). */
-export const controlRadius = (s: PlayerStats) => 0.62 + n(s.dribbling) * 0.25;
-/** Velocità oltre la quale lo stop non riesce e la palla schizza via (m/s). */
-export const controlMaxSpeed = (s: PlayerStats) => 15 + n(s.dribbling) * 10;
-/** Finestra in cui la finta evita i contrasti (s). */
-export const feintEvade = (s: PlayerStats) => 0.16 + n(s.dribbling) * 0.3;
+// --- Tiro -------------------------------------------------------------------------------
+/** Velocità del tiro (m/s): tocco breve → carica piena. */
+export const shotSpeed = (s: PlayerStats, charge: number) => 14 + charge * (5 + n(s.shooting) * 11);
+/** Errore laterale (m) a piena potenza, da lontano. */
+export const shotError = (s: PlayerStats) => 0.15 + (1 - n(s.shooting)) * 0.9;
 
-// --- Contrasti --------------------------------------------------------------------------
-/** Contrasto in piedi frontale: difesa contro dribbling. */
-export function tackleChance(defender: PlayerStats, carrier: PlayerStats): number {
-  const p = 0.48 + (defender.defense - carrier.dribbling) * 0.011;
-  return p < 0.12 ? 0.12 : p > 0.9 ? 0.9 : p;
-}
-/** Spallata di lato: conta la forza. */
-export function shoulderChance(defender: PlayerStats, carrier: PlayerStats): number {
-  const p = 0.42 + (defender.strength - carrier.strength) * 0.009 + (defender.defense - carrier.dribbling) * 0.004;
-  return p < 0.1 ? 0.1 : p > 0.88 ? 0.88 : p;
-}
-/** Probabilità di fallo entrando da dietro. */
-export const foulFromBehind = (s: PlayerStats) => 0.7 - n(s.defense) * 0.35;
-/** Portata della scivolata (m) e velocità iniziale (m/s). */
-export const slideReach = (s: PlayerStats) => 0.75 + n(s.defense) * 0.3;
-export const slideSpeed = (s: PlayerStats) => 8 + n(s.speed) * 1.5 + n(s.defense) * 1;
+// --- Controllo palla ------------------------------------------------------------------------
+/** Raggio entro cui si prende una palla vagante (m). */
+export const controlRadius = (s: PlayerStats) => 0.7 + n(s.dribbling) * 0.2;
+/** Oltre questa velocità relativa una palla non passata a te rimbalza via (m/s). */
+export const controlMaxSpeed = (s: PlayerStats) => 16 + n(s.dribbling) * 10;
 
-// --- Portiere ----------------------------------------------------------------------------
+// --- Conduzione e contrasti: tutto fisico, niente dadi ----------------------------------------
+// Il contrasto riesce se il piede del difensore arriva sulla PALLA nel momento del contatto,
+// senza passare attraverso il corpo di chi la porta, e se la palla non è "coperta" dal suo
+// piede. Le statistiche spostano solo le finestre (portata, copertura, tempo di reazione).
+
+/** Distanza palla-corpo a ogni tocco (m): base e allungo massimo, a passo e in scatto. */
+export const TOUCH = {
+  walkBase: 0.42,
+  walkPush: 0.36,
+  sprintBase: 0.5,
+  sprintPush: 0.62,
+  walkLen: 1.6, // metri tra un tocco e l'altro
+  sprintLen: 2.6,
+  shield: 0.36,
+};
+/** Chi dribbla bene allunga meno la palla a ogni tocco. */
+export const touchPushMult = (s: PlayerStats) => 1.15 - n(s.dribbling) * 0.3;
+/** Fin dove il piede di chi ha palla la "copre" (m dal centro del corpo): lì non si ruba. */
+export const footCover = (s: PlayerStats) => 0.5 + n(s.dribbling) * 0.1;
+/** Raggio del corpo che fa da scudo (m); proteggendo, con le braccia e la forza, è più largo. */
+export const BODY_RADIUS = 0.3;
+export const shieldRadius = (s: PlayerStats) => 0.4 + n(s.strength) * 0.1;
+/** Protezione: velocità ridotta e rapidità con cui il corpo si mette tra palla e difensore (1/s). */
+export const SHIELD_SPEED_MULT = 0.55;
+export const shieldTurn = (s: PlayerStats) => 4.5 + n(s.strength) * 2.5;
+
+/** Portata del piede nel contrasto in piedi (m dal centro del corpo del difensore). */
+export const tackleReach = (s: PlayerStats) => 0.95 + n(s.defense) * 0.25;
+/** Allungo del contrasto (m/s) e istante del contatto (s dall'inizio). */
+export const TACKLE_LUNGE = 4.5;
+export const TACKLE_CONTACT = 0.1;
+/** Margine oltre la copertura del piede: sopra = palla rubata, poco sotto = 50/50. */
+export const CLEAN_MARGIN = 0.1;
+export const LOOSE_MARGIN = -0.05;
+
+/** Portata del piede in scivolata (m) e velocità iniziale (m/s). */
+export const slideReach = (s: PlayerStats) => 0.55 + n(s.defense) * 0.2;
+export const slideSpeed = (s: PlayerStats) => 8.5 + n(s.speed) * 1.5;
+
+/** Schivata: un cambio di direzione brusco (o uno scatto) apre questa finestra (s). */
+export const EVADE_WINDOW = 0.3;
+export const EVADE_COOLDOWN = 0.7;
+
+/** Difensore CPU: tempo tra la decisione e l'entrata (segnale visibile per chi ha palla). */
+export const aiTackleReaction = (s: PlayerStats) => 0.3 - n(s.defense) * 0.12;
+/** Difensore CPU: attesa minima e massima tra due tentativi (s), prima dell'aggressività. */
+export const AI_TACKLE_WAIT = [1.5, 2.5] as const;
+
+export const TACKLE_DUR = 0.28;
+export const TACKLE_COOLDOWN = 0.55;
+/** Contrasto a vuoto: sbilanciato, deve recuperare. */
+export const TACKLE_MISS_STUN = 0.45;
+/** Contrasto evitato da un dribbling secco: sbilanciato più a lungo. */
+export const DODGED_STUN = 0.6;
+export const SLIDE_DUR = 0.55;
+export const SLIDE_COOLDOWN = 1.2;
+/** Scivolata a vuoto: a terra per un attimo. */
+export const SLIDE_MISS_DOWN = 0.5;
+/** Chi perde palla resta sbilanciato giusto un istante. */
+export const LOST_BALL_STUN = 0.22;
+
+// --- Portiere -------------------------------------------------------------------------------
 export const keeperSpeed = (s: PlayerStats) => 4.2 + n(s.speed) * 2.2;
-/** Velocità del tuffo (m/s). */
 export const keeperDive = (s: PlayerStats) => 5 + n(s.defense) * 4;
-export const keeperReaction = (s: PlayerStats) => 0.22 - n(s.defense) * 0.12;
+export const keeperReaction = (s: PlayerStats) => 0.2 - n(s.defense) * 0.1;
 
 /**
- * Probabilità di parata quando la palla è a portata.
+ * Probabilità di parata quando la palla è a portata: alta sui tiri centrali e deboli,
+ * bassa su quelli angolati e potenti.
  * @param lateral distanza della palla dal corpo (m)
- * @param flight secondi di volo del tiro: i tiri da lontano si leggono meglio
+ * @param flight secondi di volo: i tiri da lontano si leggono meglio
+ * @param placement 0 = centro della porta, 1 = palo: i tiri angolati sono più difficili
  */
-export function keeperSaveChance(s: PlayerStats, ballSpeed: number, lateral: number, height: number, flight: number): number {
-  let p = 0.64 + n(s.defense) * 0.32;
-  p -= Math.max(0, ballSpeed - 18) * 0.02;
-  p -= Math.max(0, lateral - 0.45) * 0.3;
-  if (height > 1.25) p -= 0.08;
-  p += Math.max(0, flight - 0.55) * 0.35;
-  return p < 0.08 ? 0.08 : p > 0.94 ? 0.94 : p;
+export function keeperSaveChance(s: PlayerStats, ballSpeed: number, lateral: number, height: number, flight: number, placement = 0): number {
+  let p = 0.72 + n(s.defense) * 0.28;
+  p -= Math.max(0, placement - 0.3) * 0.5;
+  p -= Math.max(0, ballSpeed - 17) * 0.024;
+  p -= Math.max(0, lateral - 0.4) * 0.36;
+  if (height > 1.2) p -= 0.08;
+  p += Math.max(0, flight - 0.6) * 0.3;
+  return p < 0.06 ? 0.06 : p > 0.96 ? 0.96 : p;
 }
 /** Blocca (true) o respinge: i tiri forti e lontani dal corpo si respingono. */
 export const keeperCatchChance = (s: PlayerStats, ballSpeed: number, lateral: number) =>
-  Math.max(0.05, Math.min(0.85, 0.3 + n(s.defense) * 0.4 - Math.max(0, ballSpeed - 13) * 0.04 - lateral * 0.35));
+  Math.max(0.05, Math.min(0.9, 0.35 + n(s.defense) * 0.4 - Math.max(0, ballSpeed - 13) * 0.04 - lateral * 0.35));
 
-export const STAMINA_DRAIN = 0.32;
-export const STAMINA_REGEN = 0.16;
-
-export const SKILL_COOLDOWN = 3.2;
-export const FEINT_COOLDOWN = 0.75;
-export const TACKLE_COOLDOWN = 0.8;
-export const SLIDE_COOLDOWN = 1.6;
+export const STAMINA_DRAIN = 0.28;
+export const STAMINA_REGEN = 0.18;
 
 export const SKILL_LABELS: Record<SpecialSkill, string> = {
   veronica: 'Veronica',

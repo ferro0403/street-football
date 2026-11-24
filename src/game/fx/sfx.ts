@@ -142,6 +142,10 @@ export const sfx = {
     noise(2.4, 0.35, 650, 0.4, 0.25);
     noise(2.0, 0.2, 1400, 0.5, 0.3);
   },
+  /** Un difensore sta per entrare: breve "tic" acuto, da sentire senza guardare. */
+  warn() {
+    tone(1250, 0.05, 'square', 0.07, 1500);
+  },
   ui() {
     tone(660, 0.06, 'square', 0.08, 880);
   },

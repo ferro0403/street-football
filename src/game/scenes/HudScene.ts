@@ -3,7 +3,6 @@
 import Phaser from 'phaser';
 import type { MatchScene } from './MatchScene';
 import type { MatchEvent, MatchState } from '../../shared/types';
-import { SKILL_LABELS } from '../../shared/stats';
 import { FIELD } from '../../shared/constants';
 import { COLORS, fmtClock, hexColor, safeInsets, text, view } from '../ui';
 import { isTouchDevice, touchLatch, touchState, type TouchKey } from '../input/InputManager';
@@ -14,8 +13,8 @@ interface TouchButton {
   dx: number; // posizione rispetto all'angolo in basso a destra (area sicura)
   dy: number;
   r: number;
-  label: string;
-  alt: string; // etichetta senza palla
+  label: string; // con la palla ('' = non serve)
+  alt: string; // senza palla ('' = non serve)
   color: number;
   x: number;
   y: number;
@@ -24,17 +23,22 @@ interface TouchButton {
   down: boolean;
 }
 
-type Grab = { kind: 'stick' } | { kind: 'btn'; key: TouchKey } | { kind: 'none' };
+type Grab = { kind: 'stick' } | { kind: 'btn'; key: TouchKey; x0: number; y0: number; pending?: number } | { kind: 'none' };
 
 const BUTTONS: Omit<TouchButton, 'x' | 'y' | 'g' | 't' | 'down'>[] = [
-  { key: 'shoot', dx: -78, dy: -165, r: 60, label: 'TIRA', alt: 'CONTRASTO', color: 0xff4d6d },
+  { key: 'shoot', dx: -78, dy: -165, r: 60, label: 'TIRA', alt: '', color: 0xff4d6d },
   { key: 'pass', dx: -178, dy: -64, r: 56, label: 'PASSA', alt: 'CAMBIO', color: 0x2ec4b6 },
   { key: 'sprint', dx: -64, dy: -52, r: 48, label: 'SCATTO', alt: 'SCATTO', color: 0x7cff6b },
-  { key: 'lob', dx: -285, dy: -52, r: 42, label: 'LANCIO', alt: 'SCIVOLATA', color: 0x4d9dff },
-  { key: 'through', dx: -272, dy: -152, r: 40, label: 'FILTRANTE', alt: '', color: 0x00d0ff },
-  { key: 'skill', dx: -184, dy: -220, r: 40, label: 'SKILL', alt: '', color: 0xffd21f },
-  { key: 'feint', dx: -64, dy: -278, r: 36, label: 'FINTA', alt: '', color: 0xb47cff },
+  // Difesa: CONTRASTO (trascinalo = scivolata) e SCIVOLATA.
+  // Con la palla lo stesso pulsante è PROTEGGI (tenuto premuto).
+  { key: 'tackle', dx: -200, dy: -182, r: 50, label: 'PROTEGGI', alt: 'CONTRASTO', color: 0xffb14d },
+  { key: 'slide', dx: -298, dy: -76, r: 44, label: '', alt: 'SCIVOLATA', color: 0x4d9dff },
 ];
+
+/** Trascinando il dito sul pulsante CONTRASTO per più di tanto si fa la scivolata. */
+const SWIPE_SLIDE = 44;
+/** Il CONTRASTO parte dopo questo tempo (o al rilascio): prima c'è spazio per lo swipe. */
+const TACKLE_WAIT_MS = 90;
 
 export class HudScene extends Phaser.Scene {
   private match!: MatchScene;
@@ -49,7 +53,6 @@ export class HudScene extends Phaser.Scene {
   private radar!: Phaser.GameObjects.Graphics;
   private banner!: Phaser.GameObjects.Text;
   private sub!: Phaser.GameObjects.Text;
-  private skillText!: Phaser.GameObjects.Text;
   private replayBars!: Phaser.GameObjects.Graphics;
   private replayText!: Phaser.GameObjects.Text;
   private pauseBtn!: Phaser.GameObjects.Text;
@@ -87,7 +90,6 @@ export class HudScene extends Phaser.Scene {
 
     this.banner = text(this, 0, 0, '', 40, hexColor(COLORS.yellow)).setVisible(false).setDepth(10);
     this.sub = text(this, 0, 0, '', 14).setVisible(false).setDepth(10);
-    this.skillText = text(this, 0, 0, '', 34, '#2ec4b6').setVisible(false).setDepth(11);
 
     this.replayBars = this.add.graphics().setVisible(false);
     this.replayText = text(this, 0, 0, '● REPLAY', 14, '#ff4d6d', 0).setVisible(false).setDepth(10);
@@ -151,7 +153,6 @@ export class HudScene extends Phaser.Scene {
 
     this.banner.setPosition(cx, h / 2 - 40);
     this.sub.setPosition(cx, h / 2 + 10);
-    this.skillText.setPosition(cx, top + 110);
 
     this.replayBars.clear().fillStyle(0x000000, 1).fillRect(0, 0, w, 46).fillRect(0, h - 46, w, 46);
     this.replayText.setPosition(ins.l + 14, h - 23);
@@ -194,23 +195,14 @@ export class HudScene extends Phaser.Scene {
       case 'post':
         this.toast('PALO!');
         break;
-      case 'foul':
-        this.toast('FALLO!', '#ff4d6d');
-        break;
       case 'tackle':
-        this.toast(e.skill === 'slide' ? 'SCIVOLATA!' : e.skill === 'shoulder' ? 'SPALLATA!' : 'RUBATA!', e.team === 0 ? '#7cff6b' : '#ff4d6d');
+        this.toast(e.skill === 'slide' ? 'SCIVOLATA!' : 'RUBATA!', e.team === 0 ? '#7cff6b' : '#ff4d6d');
         break;
-      case 'steal':
-        this.toast('SOFFIATA!', e.team === 0 ? '#7cff6b' : '#ff4d6d');
-        break;
-      case 'heavyTouch':
-        if (e.team === 0) this.toast('PALLA LUNGA!', '#ffb14d');
+      case 'tackleLoose':
+        this.toast('PALLA CONTESA!', '#ffb14d');
         break;
       case 'dodge':
-        this.toast('SALTATO!', '#2ec4b6');
-        break;
-      case 'special':
-        this.showSkill(e);
+        this.toast('SALTATO!', e.team === 0 ? '#ff4d6d' : '#7cff6b');
         break;
       case 'end': {
         const [a, b] = s.score;
@@ -218,23 +210,6 @@ export class HudScene extends Phaser.Scene {
         break;
       }
     }
-  }
-
-  private showSkill(e: MatchEvent): void {
-    const s = this.match.state;
-    const name = (SKILL_LABELS[e.skill as keyof typeof SKILL_LABELS] ?? 'SKILL').toUpperCase();
-    const p = e.p !== undefined ? s.players[e.p] : null;
-    const kit = s.teams[e.team ?? 0].kit;
-    this.tweens.killTweensOf(this.skillText);
-    this.skillText
-      .setText(`${name}!${p ? `\n${p.name.toUpperCase()}` : ''}`)
-      .setColor(hexColor(kit.shirt === 0xffffff ? COLORS.yellow : kit.shirt))
-      .setVisible(true)
-      .setAlpha(1)
-      .setScale(0.3)
-      .setAngle(-8);
-    this.tweens.add({ targets: this.skillText, scale: 1, angle: 0, duration: 320, ease: 'Back.Out' });
-    this.tweens.add({ targets: this.skillText, alpha: 0, delay: 1100, duration: 350 });
   }
 
   private onReplay(on: boolean): void {
@@ -290,7 +265,23 @@ export class HudScene extends Phaser.Scene {
     this.clockText.setColor(s.clock <= 10 && s.phase === 'play' ? '#ff4d6d' : '#ffffff');
     this.drawCard(s);
     this.drawRadar(s);
-    if (this.touchOn) this.updateTouchLabels(s);
+    if (this.touchOn) {
+      this.updateTouchLabels(s);
+      this.resolvePendingTackles();
+    }
+  }
+
+  /** Dito fermo sul CONTRASTO abbastanza a lungo: è un contrasto, non uno swipe. */
+  private resolvePendingTackles(): void {
+    let changed = false;
+    for (const [id, g] of this.grabs) {
+      if (g.kind === 'btn' && g.pending !== undefined && this.time.now - g.pending >= TACKLE_WAIT_MS) {
+        this.grabs.set(id, { kind: 'btn', key: 'tackle', x0: g.x0, y0: g.y0 });
+        touchLatch.add('tackle');
+        changed = true;
+      }
+    }
+    if (changed) this.syncButtons();
   }
 
   private drawCard(s: MatchState): void {
@@ -309,9 +300,8 @@ export class HudScene extends Phaser.Scene {
     this.card.fillStyle(COLORS.ink, 0.8).fillRect(x, cy - 16, w, 50);
     this.card.fillStyle(s.teams[0].kit.shirt, 1).fillRect(x, cy - 16, 5, 50);
     this.cardName.setText(`#${p.number} ${p.name.toUpperCase()}  ${p.ovr}`).setPosition(x + 12, cy - 4);
-    const skill = p.special ? SKILL_LABELS[p.special] : '-';
-    const ready = p.skillCd <= 0 ? 'PRONTA' : `${p.skillCd.toFixed(1)}s`;
-    this.cardInfo.setText(`SKILL ${skill.toUpperCase()} ${ready}`).setPosition(x + 12, cy + 12);
+    const st = p.stats;
+    this.cardInfo.setText(`VEL ${st.speed} DRI ${st.dribbling} TIR ${st.shooting} DIF ${st.defense}`).setPosition(x + 12, cy + 12);
     this.card.fillStyle(0x333044, 1).fillRect(x + 12, cy + 22, w - 24, 6);
     this.card.fillStyle(p.stamina > 0.3 ? 0x7cff6b : 0xff4d6d, 1).fillRect(x + 12, cy + 22, (w - 24) * p.stamina, 6);
   }
@@ -350,7 +340,7 @@ export class HudScene extends Phaser.Scene {
     this.stickHint = text(this, 0, 0, 'MUOVITI\nQUI', 9, '#ffffff').setAlpha(0.25).setVisible(false);
     for (const d of BUTTONS) {
       const g = this.add.graphics().setDepth(20);
-      const t = text(this, 0, 0, d.label, d.r >= 50 ? 11 : d.r >= 42 ? 9 : 8).setDepth(21);
+      const t = text(this, 0, 0, d.label || d.alt, d.r >= 50 ? 11 : d.r >= 42 ? 9 : 8).setDepth(21);
       this.buttons.push({ ...d, x: 0, y: 0, g, t, down: false });
     }
     this.setButtonsVisible(false);
@@ -410,7 +400,13 @@ export class HudScene extends Phaser.Scene {
     const { w } = view(this);
     const b = this.buttonAt(p.x, p.y);
     if (b) {
-      this.grabs.set(p.id, { kind: 'btn', key: b.key });
+      if (b.key === 'tackle' && !this.hasBallLabels) {
+        // In attesa: tap = contrasto, swipe = scivolata.
+        this.grabs.set(p.id, { kind: 'btn', key: b.key, x0: p.x, y0: p.y, pending: this.time.now });
+        this.syncButtons();
+        return;
+      }
+      this.grabs.set(p.id, { kind: 'btn', key: b.key, x0: p.x, y0: p.y });
       this.syncButtons();
       touchLatch.add(b.key);
       try {
@@ -466,10 +462,17 @@ export class HudScene extends Phaser.Scene {
       touchState.sx = sx;
       touchState.sy = sy;
     } else if (g.kind === 'btn') {
+      // Swipe sul CONTRASTO = scivolata.
+      if (g.key === 'tackle' && g.pending !== undefined && Math.hypot(p.x - g.x0, p.y - g.y0) > SWIPE_SLIDE) {
+        this.grabs.set(p.id, { kind: 'btn', key: 'slide', x0: p.x, y0: p.y });
+        touchLatch.add('slide');
+        this.syncButtons();
+        return;
+      }
       // Il dito può scivolare su un altro pulsante.
       const b = this.buttonAt(p.x, p.y);
-      if (b && b.key !== g.key) {
-        this.grabs.set(p.id, { kind: 'btn', key: b.key });
+      if (b && b.key !== g.key && g.key !== 'slide') {
+        this.grabs.set(p.id, { kind: 'btn', key: b.key, x0: p.x, y0: p.y });
         touchLatch.add(b.key);
         this.syncButtons();
       }
@@ -480,6 +483,7 @@ export class HudScene extends Phaser.Scene {
     const g = this.grabs.get(p.id);
     if (!g) return;
     this.grabs.delete(p.id);
+    if (g.kind === 'btn' && g.pending !== undefined) touchLatch.add('tackle'); // tap veloce
     if (g.kind === 'stick') {
       touchState.sx = 0;
       touchState.sy = 0;
@@ -491,7 +495,7 @@ export class HudScene extends Phaser.Scene {
 
   private releaseAll(): void {
     this.grabs.clear();
-    Object.assign(touchState, { sx: 0, sy: 0, pass: false, lob: false, through: false, shoot: false, sprint: false, skill: false, feint: false, pause: false });
+    Object.assign(touchState, { sx: 0, sy: 0, pass: false, shoot: false, sprint: false, tackle: false, slide: false, pause: false });
     if (this.stickBase) this.parkStick();
     if (this.buttons.length) this.syncButtons();
   }
@@ -499,10 +503,15 @@ export class HudScene extends Phaser.Scene {
   /** Aggiorna lo stato premuto dei pulsanti da tutti i diti attivi. */
   private syncButtons(): void {
     const held = new Set<TouchKey>();
-    for (const g of this.grabs.values()) if (g.kind === 'btn') held.add(g.key);
+    const lit = new Set<TouchKey>(); // anche il CONTRASTO in attesa si illumina subito
+    for (const g of this.grabs.values()) {
+      if (g.kind !== 'btn') continue;
+      lit.add(g.key);
+      if (g.pending === undefined) held.add(g.key);
+    }
     for (const b of this.buttons) {
-      const on = held.has(b.key);
-      touchState[b.key] = on;
+      touchState[b.key] = held.has(b.key);
+      const on = lit.has(b.key);
       if (b.down !== on) {
         b.down = on;
         this.drawButton(b, this.enabledFor(b));
@@ -511,7 +520,7 @@ export class HudScene extends Phaser.Scene {
   }
 
   private enabledFor(b: TouchButton): boolean {
-    return this.hasBallLabels || b.alt !== '';
+    return (this.hasBallLabels ? b.label : b.alt) !== '';
   }
 
   /** Con o senza palla i pulsanti cambiano significato (e scritta). */
@@ -524,7 +533,7 @@ export class HudScene extends Phaser.Scene {
     if (attacking === this.hasBallLabels) return;
     this.hasBallLabels = attacking;
     for (const b of this.buttons) {
-      b.t.setText(attacking || !b.alt ? b.label : b.alt);
+      b.t.setText((attacking ? b.label : b.alt) || b.label || b.alt);
       this.drawButton(b, this.enabledFor(b));
     }
   }

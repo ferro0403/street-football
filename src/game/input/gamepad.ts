@@ -13,12 +13,12 @@ export function radialDeadzone(x: number, y: number, dead = STICK_DEADZONE): [nu
 // Mappatura "standard" della Gamepad API (Xbox / PlayStation), stile FIFA.
 export const PAD = {
   A: 0, // A / Croce → passaggio (senza palla: cambio)
-  B: 1, // B / Cerchio → tiro (senza palla: contrasto)
-  X: 2, // X / Quadrato → lancio alto (senza palla: scivolata)
-  Y: 3, // Y / Triangolo → filtrante
+  B: 1, // B / Cerchio → tiro (tieni premuto = più potenza)
+  X: 2, // X / Quadrato → contrasto in piedi
+  Y: 3, // Y / Triangolo → scivolata
   LB: 4, // cambio giocatore
-  RB: 5, // skill
-  LT: 6, // finta
+  RB: 5, // scatto (alternativa)
+  LT: 6, // protezione palla (tenuto premuto)
   RT: 7, // scatto
   SELECT: 8,
   START: 9,

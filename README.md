@@ -43,7 +43,8 @@ galleria animata dal menu (GIOCATORI). Direzione artistica e provenienza: `docs/
   stato JSON puro. È pensata per girare identica su un server Node (fase online).
   - `match.ts`: ciclo della partita, controller umani, cambio giocatore, gol, timer
   - `ball.ts`: fisica della palla (gravità, rimbalzi, attrito, pareti, pali, reti)
-  - `actions.ts`: tiro, passaggio, contrasto, finta, skill speciali
+  - `actions.ts`: tiro, passaggio, contrasto in piedi, scivolata (niente falli)
+  - `tune.ts`: regolazioni del pannello debug (F2)
   - `ai.ts`: IA di compagni e avversari · `keeper.ts`: portiere CPU
   - `stats.ts`: come le statistiche (velocità, tiro, passaggio, dribbling, difesa, forza)
     diventano numeri di gioco: tutto il bilanciamento
@@ -56,18 +57,26 @@ galleria animata dal menu (GIOCATORI). Direzione artistica e provenienza: `docs/
 | Azione | Tastiera | Controller | Touch |
 |---|---|---|---|
 | Movimento | WASD / frecce | levetta sinistra / croce | joystick (appare dove appoggi il pollice, metà sinistra) |
-| Passaggio rasoterra (tieni = più teso) | J (o Z) | A / Croce | PASSA |
-| Lancio alto | U (o C) | X / Quadrato | LANCIO |
-| Filtrante nello spazio | O (o V) | Y / Triangolo | FILTRANTE |
-| Tiro (tieni = più forte; levetta verso un angolo = a giro) | K (o X) | B / Cerchio | TIRA |
-| Scatto | Shift / Spazio | RT / R2 | SCATTO |
-| Finta | L (o B) | LT / L2 | FINTA |
-| Skill speciale | I (o N) | RB / R1 | SKILL |
-| Cambio giocatore | Q | LB / L1 | PASSA senza palla |
+| Passaggio rasoterra al compagno verso cui punti (un tocco) | J (o Z) | A / Croce | PASSA |
+| Tiro verso la porta (tieni = più forte, levetta = lato) | K (o X) | B / Cerchio | TIRA |
+| Contrasto in piedi | L (o C) | X / Quadrato | CONTRASTO |
+| Scivolata | U (o V) | Y / Triangolo | SCIVOLATA (o trascina CONTRASTO) |
+| Protezione palla (tieni premuto) | I (o B) | LT / L2 | PROTEGGI (il pulsante CONTRASTO quando hai palla) |
+| Scatto | Shift / Spazio | RT / RB | SCATTO |
+| Cambio giocatore | Q | LB / L1 | PASSA senza palla (CAMBIO) |
 | Pausa | Esc / P | Start | II in alto |
+| Pannello debug (velocità, contrasto, passaggi, tiri) | F2 | – | – |
 
-Senza palla: TIRO = contrasto in piedi, LANCIO = scivolata, PASSAGGIO = cambio giocatore.
-Entrando da dietro si fa fallo; di lato il contrasto diventa una spallata (conta la forza).
+Niente arbitro, niente falli, niente fuorigioco: la gabbia tiene la palla sempre in gioco.
+Il giocatore che controlli fa **solo** quello che premi: nessun contrasto automatico.
+
+**Contrasti fisici, senza dadi**: il contrasto riesce se il piede arriva sulla palla nel momento
+del contatto. A ogni tocco la palla si stacca un po' dal piede: è lì che si ruba. Da dietro (o
+contro chi protegge) il corpo fa da scudo. Un "!" sopra un difensore CPU vuol dire che sta per
+entrare: un cambio di direzione secco o uno scatto in quel momento lo manda a vuoto.
+
+**Passaggi**: rasoterra veloce alla posizione attuale del compagno (linea tratteggiata = a chi
+passi). Senza compagni in quella direzione va al più libero; contro il muro solo se lo punti.
 
 ## Pubblicazione
 

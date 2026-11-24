@@ -9,28 +9,26 @@ export interface ScreenInput {
   sy: number;
   sprint: boolean;
   pass: boolean;
-  lob: boolean;
-  through: boolean;
   shoot: boolean;
-  feint: boolean;
-  skill: boolean;
+  tackle: boolean;
+  slide: boolean;
+  shield: boolean;
   switch: boolean;
   pause: boolean;
+  debug: boolean;
 }
 
-export type TouchKey = 'pass' | 'lob' | 'through' | 'shoot' | 'sprint' | 'skill' | 'feint';
+export type TouchKey = 'pass' | 'shoot' | 'sprint' | 'tackle' | 'slide';
 
 /** Stato scritto dai comandi touch (HudScene, a eventi: nessun ritardo) e letto qui. */
 export const touchState = {
   sx: 0,
   sy: 0,
   pass: false,
-  lob: false,
-  through: false,
   shoot: false,
   sprint: false,
-  skill: false,
-  feint: false,
+  tackle: false,
+  slide: false,
   pause: false,
 };
 /** Tocchi rapidissimi (giù e su prima del fotogramma successivo): non vanno persi. */
@@ -58,25 +56,24 @@ export class InputManager {
         down: K.DOWN,
         left: K.LEFT,
         right: K.RIGHT,
-        // Mano destra: U I O sopra, J K L sotto.
+        // Mano destra: J passa, K tira, L contrasto, U scivolata, I protegge palla.
         pass: K.J,
         shoot: K.K,
-        feint: K.L,
-        lob: K.U,
-        skill: K.I,
-        through: K.O,
+        tackle: K.L,
+        slide: K.U,
+        shield: K.I,
         sprint: K.SHIFT,
         sprint2: K.SPACE,
         switch: K.Q,
         pause: K.ESC,
         pause2: K.P,
-        // Alternativa per chi muove con le frecce: Z X C V B N.
+        debug: K.F2,
+        // Alternativa per chi muove con le frecce: Z X C V.
         pass2: K.Z,
         shoot2: K.X,
-        lob2: K.C,
-        through2: K.V,
-        feint2: K.B,
-        skill2: K.N,
+        tackle2: K.C,
+        slide2: K.V,
+        shield2: K.B,
       };
       for (const [name, code] of Object.entries(map)) {
         const key = kb.addKey(code, true, false);
@@ -107,13 +104,13 @@ export class InputManager {
       sy,
       sprint: this.down('sprint', 'sprint2'),
       pass: this.down('pass', 'pass2'),
-      lob: this.down('lob', 'lob2'),
-      through: this.down('through', 'through2'),
       shoot: this.down('shoot', 'shoot2'),
-      feint: this.down('feint', 'feint2'),
-      skill: this.down('skill', 'skill2'),
+      tackle: this.down('tackle', 'tackle2'),
+      slide: this.down('slide', 'slide2'),
+      shield: this.down('shield', 'shield2'),
       switch: this.down('switch'),
       pause: this.down('pause', 'pause2'),
+      debug: this.down('debug'),
     };
 
     // Controller (solo quello attivo, calibrato).
@@ -142,14 +139,13 @@ export class InputManager {
       }
       out.pass ||= b(PAD.A);
       out.shoot ||= b(PAD.B);
-      out.lob ||= b(PAD.X);
-      out.through ||= b(PAD.Y);
+      out.tackle ||= b(PAD.X);
+      out.slide ||= b(PAD.Y);
+      out.shield ||= b(PAD.LT);
       out.switch ||= b(PAD.LB);
-      out.skill ||= b(PAD.RB);
-      out.feint ||= b(PAD.LT);
-      out.sprint ||= b(PAD.RT) || b(PAD.L3);
+      out.sprint ||= b(PAD.RT) || b(PAD.RB) || b(PAD.L3);
       out.pause ||= b(PAD.START);
-      if (out.pass || out.shoot || out.lob || out.through) this.lastDevice = 'gamepad';
+      if (out.pass || out.shoot || out.tackle || out.slide) this.lastDevice = 'gamepad';
     }
 
     // Touch.
@@ -160,11 +156,11 @@ export class InputManager {
     }
     out.sprint ||= t.sprint || touchLatch.has('sprint');
     out.pass ||= t.pass || touchLatch.has('pass');
-    out.lob ||= t.lob || touchLatch.has('lob');
-    out.through ||= t.through || touchLatch.has('through');
     out.shoot ||= t.shoot || touchLatch.has('shoot');
-    out.feint ||= t.feint || touchLatch.has('feint');
-    out.skill ||= t.skill || touchLatch.has('skill');
+    out.tackle ||= t.tackle || touchLatch.has('tackle');
+    out.slide ||= t.slide || touchLatch.has('slide');
+    // Il pulsante CONTRASTO con la palla diventa PROTEGGI (tenuto premuto).
+    out.shield ||= t.tackle;
     out.pause ||= t.pause;
     touchLatch.clear();
     this.latched.clear();

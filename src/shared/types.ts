@@ -57,23 +57,19 @@ export interface TeamDef {
   players: PlayerDef[];
 }
 
+/**
+ * Azioni del nucleo di gioco (Passo 1). Niente falli, niente trucchi: solo calcio, passaggio,
+ * tiro, contrasto in piedi, scivolata, tuffo del portiere ed esultanza.
+ */
 export type ActionKind =
   | 'none'
-  | 'kick'
+  | 'kick' // passaggio
   | 'shoot'
-  | 'tackle'
-  | 'shoulder'
-  | 'slide'
-  | 'fall'
-  | 'stagger'
-  | 'feint'
-  | 'veronica'
-  | 'elastico'
-  | 'sombrero'
-  | 'tunnel'
-  | 'rabona'
-  | 'dive'
-  | 'stunned'
+  | 'tackle' // contrasto in piedi
+  | 'slide' // scivolata
+  | 'fall' // a terra dopo una scivolata a vuoto (brevissimo)
+  | 'stagger' // sbilanciato: contrasto mancato o palla persa
+  | 'dive' // tuffo del portiere
   | 'celebrate';
 
 export interface PlayerAction {
@@ -82,21 +78,24 @@ export interface PlayerAction {
   dur: number;
   dx: number;
   dy: number;
-  /** Per il contrasto: già risolto in questo intervento. */
+  /** Il contatto con la palla è già stato valutato in questa azione. */
   done: boolean;
-  /** Dati extra dell'azione (es. perno della veronica, lato dell'elastico). */
-  ax: number;
-  ay: number;
-  side: number;
-  /** Bersaglio dell'azione (es. difensore saltato), -1 = nessuno. */
-  target: number;
 }
 
 export interface AiMemory {
   think: number;
   tx: number;
   ty: number;
-  score: number;
+  /** Secondi da cui il giocatore non si muove (guardia anti-blocco). */
+  still: number;
+  /** Difensore CPU: secondi alla partenza del contrasto già deciso (segnale visibile). */
+  windup: number;
+  /** Difensore CPU: attesa prima di poter tentare un altro contrasto. */
+  tackleWait: number;
+  /** Portatore CPU: da quanto è pressato da vicino (s): oltre un certo tempo scarica la palla. */
+  pressed: number;
+  /** Portatore CPU: tra quanto fa il dribbling secco per evitare il contrasto (0 = nessuno). */
+  cut: number;
 }
 
 export interface KeeperMemory {
@@ -114,7 +113,6 @@ export interface PlayerState {
   name: string;
   number: number;
   stats: PlayerStats;
-  special: SpecialSkill | null;
   ovr: number;
   x: number;
   y: number;
@@ -125,21 +123,28 @@ export interface PlayerState {
   fy: number;
   stamina: number;
   action: PlayerAction;
+  /** Secondi in cui non può muoversi né agire (dopo un contrasto subito o mancato). */
   stun: number;
-  /** Finestra in cui i contrasti vanno a vuoto (finte, skill). */
-  evade: number;
-  skillCd: number;
-  feintCd: number;
   tackleCd: number;
-  charge: number;
-  chargeKind: 'none' | 'shot' | 'pass';
-  /** Fase del palleggio (0..1): la palla si allontana e torna ai piedi. */
-  dribble: number;
-  /** Distanza attuale palla-piedi quando la conduce (m). */
-  ballOff: number;
-  /** Dopo un controllo perso o un cambio brusco, breve pausa. */
-  touchCd: number;
   slideCd: number;
+  /** Carica del tiro (0..1) mentre si tiene premuto. */
+  charge: number;
+  charging: boolean;
+  /** Fase del tocco di palla: a ogni tocco la palla si allontana un po' dal piede. */
+  dribble: number;
+  /** Sta scattando in questo momento (serve a prevedere il tocco). */
+  sprinting: boolean;
+  /** Protezione palla attiva (corpo tra palla e difensore). */
+  shielding: boolean;
+  /** Lato della palla durante la protezione (direzione normalizzata dal corpo alla palla). */
+  shx: number;
+  shy: number;
+  /** Finestra di schivata dopo un cambio di direzione brusco o uno scatto (s). */
+  evade: number;
+  evadeCd: number;
+  /** Ultima direzione di corsa voluta (per riconoscere i cambi di direzione bruschi). */
+  lmx: number;
+  lmy: number;
   /** ID del controller umano che lo guida, null = CPU. */
   human: string | null;
   ai: AiMemory;
@@ -158,39 +163,35 @@ export interface BallState {
   /** Chi ha appena calciato non può riprenderla subito. */
   kicker: number;
   kickCd: number;
+  /** Destinatario del passaggio in corso (-1 = nessuno). */
   passTarget: number;
   shotId: number;
   shotTeam: number;
   shotActive: boolean;
-  /** Da dove è partito il tiro (per i tiri dalla distanza). */
+  /** Da dove è partito il tiro (i tiri da lontano si parano meglio). */
   shotX: number;
   shotY: number;
-  /** Effetto: accelerazione laterale (m/s²) perpendicolare alla velocità. */
-  spin: number;
-  /** 0 nessuno, 1 rasoterra, 2 lancio, 3 filtrante. */
-  passKind: number;
-  /** Punto dove andrà ricevuto il passaggio. */
-  passTx: number;
-  passTy: number;
   /** Squadra che ha segnato in questa azione (palla dentro la rete), -1 = no. */
   inGoal: number;
 }
 
+/** Input di un giocatore umano per un tick. I tasti sono "tenuti"; i fronti li calcola la simulazione. */
 export interface PlayerInput {
   /** Direzione nel piano del campo (coordinate mondo), lunghezza <= 1. */
   mx: number;
   my: number;
   sprint: boolean;
-  /** Con palla: passaggio rasoterra (tieni = più veloce). Senza: cambio giocatore. */
+  /** Con palla: passaggio rasoterra (alla pressione). Senza palla: cambio giocatore. */
   pass: boolean;
-  /** Con palla: lancio alto. Senza: scivolata. */
-  lob: boolean;
-  /** Con palla: passaggio filtrante nello spazio. */
-  through: boolean;
-  /** Con palla: tiro (tieni = più forte). Senza: contrasto in piedi. */
+  /** Con palla: tiro (tieni = più potenza, parte al rilascio). */
   shoot: boolean;
-  feint: boolean;
-  skill: boolean;
+  /** Senza palla: contrasto in piedi. */
+  tackle: boolean;
+  /** Senza palla: scivolata. */
+  slide: boolean;
+  /** Con palla: protezione (tenuto premuto). */
+  shield: boolean;
+  /** Cambio giocatore. */
   switch: boolean;
 }
 
@@ -206,7 +207,6 @@ export interface ControllerState {
 export type MatchPhase = 'kickoff' | 'play' | 'goal' | 'ended';
 
 export type MatchEventType =
-  | 'kick'
   | 'pass'
   | 'shot'
   | 'bounce'
@@ -217,14 +217,11 @@ export type MatchEventType =
   | 'catch'
   | 'dive'
   | 'tackle'
+  | 'tackleMiss' // contrasto a vuoto: difensore sbilanciato
+  | 'tackleLoose' // contrasto 50/50: palla che schizza libera
+  | 'dodge' // l'attaccante ha evitato il contrasto con un cambio di direzione
+  | 'windup' // un difensore CPU sta per entrare (segnale per chi ha palla)
   | 'slide'
-  | 'foul'
-  | 'steal'
-  | 'heavyTouch'
-  | 'tackleMiss'
-  | 'dodge'
-  | 'feint'
-  | 'special'
   | 'whistle'
   | 'kickoff'
   | 'end'
@@ -249,7 +246,6 @@ export interface TeamMatchStats {
   saves: number;
   tackles: number;
   passes: number;
-  fouls: number;
   possessionTicks: number;
 }
 
@@ -261,6 +257,20 @@ export interface TeamMeta {
   kit: Kit;
   gkKit: Kit;
   ovr: number;
+}
+
+/** Parametri regolabili dal pannello debug (F2). Fanno parte dello stato: tutto resta deterministico. */
+export interface Tuning {
+  /** Velocità dei giocatori (moltiplicatore). */
+  speed: number;
+  /** Forza del contrasto: allunga la portata del piede e allarga la finestra utile. */
+  tackle: number;
+  /** Aggressività dei difensori CPU: quanto spesso e quanto presto entrano. */
+  aggression: number;
+  /** Potenza dei passaggi (velocità di arrivo al compagno). */
+  pass: number;
+  /** Potenza dei tiri. */
+  shot: number;
 }
 
 export interface MatchState {
@@ -280,6 +290,7 @@ export interface MatchState {
   kickoffTeam: TeamIndex;
   lastGoal: { team: TeamIndex; scorer: number; ownGoal: boolean; tick: number } | null;
   stats: [TeamMatchStats, TeamMatchStats];
+  tune: Tuning;
   /** Eventi prodotti nell'ultimo tick (per suoni ed effetti lato client). */
   events: MatchEvent[];
 }
