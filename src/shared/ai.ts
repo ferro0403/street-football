@@ -4,7 +4,7 @@
 import { CENTER_Y, DT, FIELD } from './constants';
 import { clamp, dist, norm } from './math';
 import { chance, nextRandom } from './rng';
-import { feint, pass, passValue, shoot, special, startTackle } from './actions';
+import { feint, groundPass, lobPass, passValue, shoot, special, startSlide, startTackle, throughPass } from './actions';
 import type { MatchState, PlayerState, TeamIndex } from './types';
 import {
   attackDir,
@@ -73,13 +73,15 @@ function carrier(s: MatchState, p: PlayerState): Intent {
     if (dGoal < range && angleOk) {
       const clear = laneClear(s, p.team, p.x, p.y, gx, CENTER_Y, 0.9, true);
       const quality = (1 - dGoal / range) * (clear ? 1 : 0.35) * (pressured ? 0.75 : 1);
-      if (quality > 0.35 || chance(s, quality * 0.5)) {
+      if (quality > 0.33 || dGoal < 5.5 || chance(s, quality * 0.4)) {
         const k = keeperOf(s, p.team === 0 ? 1 : 0);
         // Mira dal lato opposto al portiere, con un po' di varietà.
         const side = k.y < CENTER_Y ? 1 : -1;
         const aim = chance(s, 0.75) ? side * (0.35 + nextRandom(s) * 0.65) : -side * nextRandom(s) * 0.6;
         const power = clamp(0.35 + dGoal / 26 + nextRandom(s) * 0.25, 0.4, 0.92);
-        shoot(s, p, power, aim);
+        // Tiro a giro quando si mira all'angolo da posizione defilata.
+        const curl = Math.abs(aim) > 0.5 && chance(s, 0.4) ? 0.4 + nextRandom(s) * 0.5 : 0;
+        shoot(s, p, power, aim, curl);
         return IDLE;
       }
     }
@@ -98,8 +100,12 @@ function carrier(s: MatchState, p: PlayerState): Intent {
     const threshold = pressured ? 0.2 : 2.2;
     if (best && bv > selfV + threshold && (pressured || chance(s, 0.55))) {
       const d = dist(p.x, p.y, best.x, best.y);
-      const lofted = !laneClear(s, p.team, p.x, p.y, best.x, best.y, 0.9) && d > 6;
-      pass(s, p, best.idx, lofted);
+      const blocked = !laneClear(s, p.team, p.x, p.y, best.x, best.y, 0.9);
+      // Filtrante se il compagno è più avanti e c'è spazio davanti a lui.
+      const ahead = (best.x - p.x) * dir > 2 && openness(s, p.team, best.x + dir * 4, best.y) > 2.5;
+      if (ahead && !blocked && chance(s, 0.45)) throughPass(s, p, best.idx, dir, 0);
+      else if (blocked && d > 6) lobPass(s, p, best.idx);
+      else groundPass(s, p, best.idx, clamp(d / 18, 0, 0.8));
       return IDLE;
     }
     // 3) Finta o skill se pressato.
@@ -114,8 +120,10 @@ function carrier(s: MatchState, p: PlayerState): Intent {
       }
     }
     // 4) Conduzione: verso la porta, evitando l'avversario più vicino.
-    let tx = gx - dir * 3;
+    // Punta una zona di tiro a ~8 m dalla porta, non la porta stessa.
+    let tx = gx - dir * 8;
     let ty = CENTER_Y + (p.y - CENTER_Y) * 0.4;
+    if (Math.abs(p.x - gx) < 9) tx = p.x; // già in zona: si allarga per trovare lo spazio
     if (opp.p && opp.d < 4) {
       const [ax, ay] = norm(p.x - opp.p.x, p.y - opp.p.y);
       const w = (4 - opp.d) * 1.6;
@@ -213,6 +221,8 @@ function predictBall(s: MatchState, t: number): [number, number] {
 
 function receive(s: MatchState, p: PlayerState): Intent {
   const b = s.ball;
+  // Filtrante e lancio: corre verso il punto di arrivo.
+  if (b.passKind >= 2) return seek(p, b.passTx, b.passTy, 1, 0.3);
   const d = dist(p.x, p.y, b.x, b.y);
   const sp = Math.sqrt(b.vx * b.vx + b.vy * b.vy) + 0.1;
   const [tx, ty] = predictBall(s, Math.min(0.6, d / sp));
@@ -291,9 +301,18 @@ function defend(s: MatchState, p: PlayerState): Intent {
     const tx = carrierP.x + carrierP.vx * lead + gdx * back;
     const ty = carrierP.y + carrierP.vy * lead + gdy * back;
     const d = dist(p.x, p.y, carrierP.x, carrierP.y);
-    if (back < 3 && d < 1.8 && p.tackleCd <= 0 && carrierP.role !== 'gk' && thinkDue(s, p, 0.15)) {
-      if (chance(s, 0.3 + p.stats.defense * 0.004)) {
+    if (back < 3 && carrierP.role !== 'gk' && p.stun <= 0 && thinkDue(s, p, 0.15)) {
+      // Da dove arrivo? Davanti/di lato: contrasto in piedi. Scivolata solo se mi sta
+      // scappando e non sono dietro (o se siamo vicini alla nostra porta).
+      const [rx, ry] = norm(p.x - carrierP.x, p.y - carrierP.y);
+      const front = rx * carrierP.fx + ry * carrierP.fy;
+      const nearOwnGoal = Math.abs(carrierP.x - gx) < 10;
+      if (d < 1.5 && p.tackleCd <= 0 && (front > -0.4 || nearOwnGoal) && chance(s, 0.3 + p.stats.defense * 0.004)) {
         startTackle(s, p);
+        return IDLE;
+      }
+      if (d > 1.6 && d < 3.2 && p.slideCd <= 0 && (front > -0.2 || (nearOwnGoal && chance(s, 0.3))) && chance(s, 0.08 + p.stats.defense * 0.0015)) {
+        startSlide(s, p);
         return IDLE;
       }
     }

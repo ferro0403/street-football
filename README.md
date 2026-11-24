@@ -27,7 +27,8 @@ npx tsx scripts/sim.ts 10
   - `ball.ts`: fisica della palla (gravità, rimbalzi, attrito, pareti, pali, reti)
   - `actions.ts`: tiro, passaggio, contrasto, finta, skill speciali
   - `ai.ts`: IA di compagni e avversari · `keeper.ts`: portiere CPU
-  - `stats.ts`: come le statistiche diventano numeri di gioco (tutto il bilanciamento)
+  - `stats.ts`: come le statistiche (velocità, tiro, passaggio, dribbling, difesa, forza)
+    diventano numeri di gioco: tutto il bilanciamento
   - `teams.ts`: squadre di prova (nomi inventati)
 - `src/game/`: client Phaser (disegno isometrico, input, HUD, effetti, replay).
 - `tests/`: test Vitest della logica condivisa.
@@ -36,16 +37,19 @@ npx tsx scripts/sim.ts 10
 
 | Azione | Tastiera | Controller | Touch |
 |---|---|---|---|
-| Movimento | WASD / frecce | levetta sinistra / croce | joystick a sinistra |
-| Passaggio (tieni = lancio) | J (o Z) | A / Croce | PASSA |
-| Tiro (tieni = più forte e alto) | K (o X) | B / Cerchio | TIRA |
-| Scatto | Shift / Spazio | RB / RT | SCATTO |
-| Finta | L (o C) | X / Quadrato | FINTA |
-| Skill speciale | I (o V) | Y / Triangolo | SKILL |
-| Cambio giocatore | Q | LB | PASSA senza palla |
+| Movimento | WASD / frecce | levetta sinistra / croce | joystick (appare dove appoggi il pollice, metà sinistra) |
+| Passaggio rasoterra (tieni = più teso) | J (o Z) | A / Croce | PASSA |
+| Lancio alto | U (o C) | X / Quadrato | LANCIO |
+| Filtrante nello spazio | O (o V) | Y / Triangolo | FILTRANTE |
+| Tiro (tieni = più forte; levetta verso un angolo = a giro) | K (o X) | B / Cerchio | TIRA |
+| Scatto | Shift / Spazio | RT / R2 | SCATTO |
+| Finta | L (o B) | LT / L2 | FINTA |
+| Skill speciale | I (o N) | RB / R1 | SKILL |
+| Cambio giocatore | Q | LB / L1 | PASSA senza palla |
 | Pausa | Esc / P | Start | II in alto |
 
-Senza palla: TIRO = contrasto, PASSAGGIO = cambio giocatore.
+Senza palla: TIRO = contrasto in piedi, LANCIO = scivolata, PASSAGGIO = cambio giocatore.
+Entrando da dietro si fa fallo; di lato il contrasto diventa una spallata (conta la forza).
 
 ## Pubblicazione
 

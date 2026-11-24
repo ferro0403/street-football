@@ -1,24 +1,85 @@
-// Fisica della palla: gravità, rimbalzi sul terreno, attrito, pareti della gabbia, pali e reti.
-// La gabbia è chiusa: l'unico modo per superare le linee di fondo è entrare in porta.
+// Fisica della palla: gravità, rimbalzi sul terreno, attrito, effetto, pareti della gabbia,
+// pali e reti. La gabbia è chiusa: l'unico modo per superare le linee di fondo è entrare in porta.
 import { CENTER_Y, DT, FIELD, PHYS } from './constants';
 import { len } from './math';
 import { randSigned } from './rng';
+import { DRIBBLE_BASE, dribbleAmpSprint, dribbleAmpWalk, runSpeed } from './stats';
 import type { MatchState } from './types';
 
 const R = PHYS.ballRadius;
 const HALF_GOAL = FIELD.goalWidth / 2;
+
+/** Un passo di rotolamento (palla a terra): stessa formula usata da stepBall. */
+function rollStep(speed: number): number {
+  return Math.max(0, speed - (PHYS.rollFriction + PHYS.rollDrag * speed) * DT);
+}
+
+/** Distanza percorsa rotolando da v0 finché la velocità scende a vEnd (stessa integrazione del gioco). */
+export function rollDistance(v0: number, vEnd: number): number {
+  let v = v0;
+  let d = 0;
+  let guard = 0;
+  while (v > vEnd && guard++ < 2000) {
+    const nv = rollStep(v);
+    d += nv * DT; // stepBall integra la posizione con la velocità aggiornata
+    v = nv;
+    if (nv === 0) break;
+  }
+  return d;
+}
+
+/**
+ * Velocità iniziale per un rasoterra che percorre `dist` metri e arriva a `vEnd` m/s.
+ * Bisezione deterministica sulla stessa fisica di stepBall: il passaggio arriva davvero.
+ */
+export function groundSpeedFor(dist: number, vEnd: number): number {
+  let lo = vEnd;
+  let hi: number = PHYS.maxBallSpeed;
+  if (rollDistance(hi, vEnd) < dist) return hi;
+  for (let i = 0; i < 22; i++) {
+    const mid = (lo + hi) / 2;
+    if (rollDistance(mid, vEnd) < dist) lo = mid;
+    else hi = mid;
+  }
+  return hi;
+}
+
+/** Secondi per percorrere `dist` rotolando partendo da v0 (stima per gli anticipi). */
+export function rollTime(v0: number, dist: number): number {
+  let v = v0;
+  let d = 0;
+  let t = 0;
+  while (d < dist && v > 0.05 && t < 6) {
+    v = rollStep(v);
+    d += v * DT;
+    t += DT;
+  }
+  return t;
+}
 
 /** Avanza la palla libera di un tick. Restituisce la squadra che ha segnato o -1. */
 export function stepBall(s: MatchState): number {
   const b = s.ball;
   const ev = s.events;
 
-  // Velocità massima (evita valori assurdi e tunnelling).
   const hs = len(b.vx, b.vy);
   if (hs > PHYS.maxBallSpeed) {
     const k = PHYS.maxBallSpeed / hs;
     b.vx *= k;
     b.vy *= k;
+  }
+
+  // Effetto: accelerazione laterale perpendicolare alla velocità orizzontale.
+  if (b.spin !== 0) {
+    const sp = len(b.vx, b.vy);
+    if (sp > 1) {
+      const ax = (-b.vy / sp) * b.spin;
+      const ay = (b.vx / sp) * b.spin;
+      b.vx += ax * DT;
+      b.vy += ay * DT;
+    }
+    b.spin *= 1 - 0.6 * DT;
+    if (Math.abs(b.spin) < 0.05) b.spin = 0;
   }
 
   const airborne = b.z > 0.001 || b.vz > 0;
@@ -28,11 +89,9 @@ export function stepBall(s: MatchState): number {
     b.vx *= drag;
     b.vy *= drag;
   } else {
-    // Rotola: attrito costante + proporzionale.
     const sp = len(b.vx, b.vy);
     if (sp > 0) {
-      const ns = Math.max(0, sp - (PHYS.rollFriction + PHYS.rollDrag * sp) * DT);
-      const k = ns / sp;
+      const k = rollStep(sp) / sp;
       b.vx *= k;
       b.vy *= k;
     }
@@ -43,7 +102,6 @@ export function stepBall(s: MatchState): number {
   b.y += b.vy * DT;
   b.z += b.vz * DT;
 
-  // Terreno.
   if (b.z < 0) {
     b.z = 0;
     if (b.vz < -1.6) {
@@ -51,40 +109,36 @@ export function stepBall(s: MatchState): number {
       b.vz = impact * PHYS.groundRestitution;
       b.vx *= 0.9;
       b.vy *= 0.9;
+      b.spin *= 0.5;
       if (impact > 3) ev.push({ type: 'bounce', power: impact, x: b.x, y: b.y });
     } else {
       b.vz = 0;
     }
   }
 
-  // Tetto della gabbia.
   if (b.z > FIELD.roofHeight - R) {
     b.z = FIELD.roofHeight - R;
     if (b.vz > 0) b.vz = -b.vz * 0.4;
     ev.push({ type: 'wall', power: 4, x: b.x, y: b.y, z: b.z });
   }
 
-  // Pareti laterali (y).
   if (b.y < R) {
     b.y = R;
     if (b.vy < 0) {
       wallHit(s, Math.abs(b.vy));
       b.vy = -b.vy * PHYS.wallRestitution;
+      b.spin = 0;
     }
   } else if (b.y > FIELD.width - R) {
     b.y = FIELD.width - R;
     if (b.vy > 0) {
       wallHit(s, Math.abs(b.vy));
       b.vy = -b.vy * PHYS.wallRestitution;
+      b.spin = 0;
     }
   }
 
-  // Dentro una porta: la rete trattiene la palla.
-  if (b.inGoal >= 0 || b.x < 0 || b.x > FIELD.length) {
-    if (b.x < 0 || b.x > FIELD.length) {
-      return insideGoal(s, px);
-    }
-  }
+  if (b.x < 0 || b.x > FIELD.length) return insideGoal(s, px);
   return -1;
 }
 
@@ -92,7 +146,6 @@ function wallHit(s: MatchState, speed: number): void {
   if (speed > 2.5) s.events.push({ type: 'wall', power: speed, x: s.ball.x, y: s.ball.y, z: s.ball.z });
 }
 
-/** Gestisce la palla oltre una linea di fondo. */
 function insideGoal(s: MatchState, prevX: number): number {
   const b = s.ball;
   const left = b.x < 0;
@@ -101,7 +154,6 @@ function insideGoal(s: MatchState, prevX: number): number {
   const wasInside = left ? prevX < 0 : prevX > FIELD.length;
 
   if (!wasInside && b.inGoal < 0) {
-    // Ha appena attraversato la linea: porta, palo/traversa o parete.
     if (dy < HALF_GOAL - R && b.z < FIELD.goalHeight - R) {
       const scoringTeam = left ? 1 : 0;
       b.inGoal = scoringTeam;
@@ -111,6 +163,7 @@ function insideGoal(s: MatchState, prevX: number): number {
     const nearPost = dy < HALF_GOAL + R && b.z < FIELD.goalHeight + R;
     b.x = left ? R : FIELD.length - R;
     const speed = Math.abs(b.vx);
+    b.spin = 0;
     if (nearPost) {
       b.vx = -b.vx * PHYS.postRestitution;
       b.vy += randSigned(s) * 2.5;
@@ -129,6 +182,7 @@ function insideGoal(s: MatchState, prevX: number): number {
 
 function clampInNet(s: MatchState, left: boolean): void {
   const b = s.ball;
+  b.spin = 0;
   const back = left ? -FIELD.goalDepth + R : FIELD.length + FIELD.goalDepth - R;
   if (left ? b.x < back : b.x > back) {
     b.x = back;
@@ -146,27 +200,45 @@ function clampInNet(s: MatchState, left: boolean): void {
     b.z = FIELD.goalHeight - R;
     b.vz = -Math.abs(b.vz) * 0.2;
   }
-  // La rete smorza molto.
   b.vx *= 0.9;
   b.vy *= 0.9;
 }
 
-/** Posizione della palla mentre un giocatore la conduce. */
-export function attachBall(s: MatchState): void {
+/**
+ * Palla condotta: resta ai piedi a corsa normale, si allunga in scatto (tocchi più lunghi,
+ * di più per chi dribbla male). Le skill la spostano lateralmente (elastico).
+ */
+export function attachBall(s: MatchState, sprinting: boolean): void {
   const b = s.ball;
   const p = s.players[b.owner];
-  // Piccolo "tocco" ritmico: la palla si allontana e torna mentre corre.
   const sp = len(p.vx, p.vy);
-  const phase = (s.tick % 24) / 24;
-  const tri = phase < 0.5 ? phase * 2 : 2 - phase * 2;
-  const off = 0.48 + (sp > 1 ? tri * 0.22 : 0);
-  b.x = p.x + p.fx * off;
-  b.y = p.y + p.fy * off;
+  const run = runSpeed(p.stats);
+  // Il ciclo del tocco avanza con la strada percorsa.
+  const touchLen = sprinting ? 2.4 : 1.5;
+  p.dribble = (p.dribble + (sp * DT) / touchLen) % 1;
+  const ph = p.dribble;
+  const tri = ph < 0.5 ? ph * 2 : 2 - ph * 2;
+  const moving = Math.min(1, sp / (run * 0.6));
+  const amp = sprinting ? dribbleAmpSprint(p.stats) : dribbleAmpWalk(p.stats);
+  let off = DRIBBLE_BASE + amp * tri * moving;
+  let lat = 0;
+  if (p.action.kind === 'elastico') {
+    // Elastico: la palla va fuori col piede e poi rientra dall'altra parte.
+    const t = p.action.t / p.action.dur;
+    lat = p.action.side * (t < 0.4 ? -t / 0.4 : -1 + (t - 0.4) * 3.3) * 0.45;
+    off = 0.38;
+  } else if (p.action.kind === 'veronica') {
+    off = 0.35;
+  }
+  // Il punto di guida segue lo sguardo, che con la palla gira più lentamente.
+  p.ballOff = off;
+  b.x = p.x + p.fx * off - p.fy * lat;
+  b.y = p.y + p.fy * off + p.fx * lat;
   b.z = 0;
   b.vx = p.vx;
   b.vy = p.vy;
   b.vz = 0;
-  // Mai oltre le linee mentre la si conduce: si segna solo calciando.
+  b.spin = 0;
   if (b.x < R) b.x = R;
   if (b.x > FIELD.length - R) b.x = FIELD.length - R;
   if (b.y < R) b.y = R;

@@ -153,8 +153,8 @@ describe('controlli umani', () => {
 
 describe('le statistiche contano', () => {
   it('overall: media pesata', () => {
-    expect(overall({ speed: 80, shooting: 80, passing: 80, dribbling: 80, defense: 80 }, 'field')).toBe(80);
-    expect(overall({ speed: 50, shooting: 10, passing: 50, dribbling: 10, defense: 90 }, 'gk')).toBe(78);
+    expect(overall({ speed: 80, shooting: 80, passing: 80, dribbling: 80, defense: 80, strength: 80 }, 'field')).toBe(80);
+    expect(overall({ speed: 50, shooting: 10, passing: 50, dribbling: 10, defense: 90, strength: 60 }, 'gk')).toBe(78);
   });
 
   it('un giocatore più veloce copre più strada', () => {
@@ -203,8 +203,8 @@ describe('le statistiche contano', () => {
   });
 
   it('contrasti: la difesa alta vince più spesso del dribbling basso', () => {
-    const strongDef = tackleChance({ speed: 50, shooting: 50, passing: 50, dribbling: 50, defense: 90 }, { speed: 50, shooting: 50, passing: 50, dribbling: 50, defense: 50 });
-    const weakDef = tackleChance({ speed: 50, shooting: 50, passing: 50, dribbling: 50, defense: 50 }, { speed: 50, shooting: 50, passing: 50, dribbling: 90, defense: 50 });
+    const strongDef = tackleChance({ speed: 50, shooting: 50, passing: 50, dribbling: 50, defense: 90, strength: 60 }, { speed: 50, shooting: 50, passing: 50, dribbling: 50, defense: 50, strength: 60 });
+    const weakDef = tackleChance({ speed: 50, shooting: 50, passing: 50, dribbling: 50, defense: 50, strength: 60 }, { speed: 50, shooting: 50, passing: 50, dribbling: 90, defense: 50, strength: 60 });
     expect(strongDef).toBeGreaterThan(0.75);
     expect(weakDef).toBeLessThan(0.25);
 
