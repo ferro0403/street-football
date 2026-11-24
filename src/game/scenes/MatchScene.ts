@@ -1,15 +1,18 @@
 // Scena di gioco: fa girare la simulazione condivisa a passo fisso (60 Hz) e la disegna
-// in isometrico con interpolazione, camera che segue l'azione, effetti e replay del gol.
+// in isometrico con interpolazione, camera che segue l'azione, effetti (skill game-feel) e replay.
 import Phaser from 'phaser';
 import { createMatch, stepMatch } from '../../shared/match';
-import { DT, FIELD, RULES } from '../../shared/constants';
+import { DT, FIELD } from '../../shared/constants';
 import { teamById } from '../../shared/teams';
+import { pickPassTarget, shotAimFromInput, shotTarget } from '../../shared/actions';
+import { attackDir } from '../../shared/world';
 import type { MatchEvent, MatchState, PlayerInput, PlayerState } from '../../shared/types';
 import { isoDepth, isoX, isoY, screenToWorldDir, worldToScreenDir } from '../iso';
 import { drawField, worldBounds } from '../render/field';
 import { FRAME_H, makePlayerTexture, type FrameName } from '../render/textures';
-import { InputManager } from '../input/InputManager';
+import { InputManager, isTouchDevice } from '../input/InputManager';
 import { sfx, unlockAudio } from '../fx/sfx';
+import { view } from '../ui';
 
 export interface MatchData {
   home: string;
@@ -19,31 +22,38 @@ export interface MatchData {
 
 const LOCAL_ID = 'p1';
 const STEP_MS = DT * 1000;
-const REPLAY_START = 2.4; // secondi di esultanza prima del replay
+const REPLAY_START = 2.4;
 const REPLAY_SPEED = 0.7;
-const REPLAY_LEN = 200; // tick registrati per il replay (~3,3 s)
-const BASE_ZOOM = 1.55;
+const REPLAY_LEN = 200;
+/** Altezza del mondo visibile (pixel isometrici): più piccola = camera più vicina. */
+const VISIBLE_H_TOUCH = 225;
+const VISIBLE_H_DESKTOP = 320;
 
 interface PlayerView {
   shadow: Phaser.GameObjects.Image;
   sprite: Phaser.GameObjects.Sprite;
   tex: string;
   runDist: number;
+  ghostT: number;
 }
 
-/** Fotogramma minimo per il replay. */
 interface ReplayFrame {
   b: [number, number, number];
   p: number[]; // per giocatore: x, y, fx, fy, codice posa
   speed: number;
 }
 
-const ACTION_CODES = ['none', 'kick', 'tackle', 'feint', 'veronica', 'elastico', 'sombrero', 'tunnel', 'rabona', 'dive', 'stunned', 'celebrate'];
+const ACTION_CODES = [
+  'none', 'kick', 'tackle', 'shoulder', 'slide', 'fall', 'stagger', 'feint', 'veronica',
+  'elastico', 'sombrero', 'tunnel', 'rabona', 'dive', 'stunned', 'celebrate',
+];
+const SKILL_KINDS = new Set(['veronica', 'elastico', 'sombrero', 'tunnel', 'rabona']);
 
 export class MatchScene extends Phaser.Scene {
   state!: MatchState;
   data_!: MatchData;
   private input_!: InputManager;
+  private lastInput: PlayerInput | null = null;
   private views: PlayerView[] = [];
   private ball!: Phaser.GameObjects.Image;
   private ballShadow!: Phaser.GameObjects.Image;
@@ -51,6 +61,7 @@ export class MatchScene extends Phaser.Scene {
   private trailPts: { x: number; y: number; fire: boolean }[] = [];
   private overlay!: Phaser.GameObjects.Graphics;
   private ring!: Phaser.GameObjects.Image;
+  private targetRing!: Phaser.GameObjects.Image;
   private arrow!: Phaser.GameObjects.Image;
   private acc = 0;
   private prev: number[] = [];
@@ -60,11 +71,15 @@ export class MatchScene extends Phaser.Scene {
   replayActive = false;
   private camX = 0;
   private camY = 0;
-  private zoom = BASE_ZOOM;
+  private zoom = 1.6;
+  private zoomPunch = 0;
   private trauma = 0;
   private shakeT = 0;
   private pausePrev = true;
   private endTimer = -1;
+  /** Rallentatore (solo presentazione: la simulazione resta a passo fisso). */
+  private timeScale = 1;
+  private slowLeft = 0;
   private dust!: Phaser.GameObjects.Particles.ParticleEmitter;
   private confetti!: Phaser.GameObjects.Particles.ParticleEmitter;
   private lastBallSpeed = 0;
@@ -84,7 +99,10 @@ export class MatchScene extends Phaser.Scene {
     this.trauma = 0;
     this.endTimer = -1;
     this.pausePrev = true;
-    this.zoom = BASE_ZOOM;
+    this.timeScale = 1;
+    this.slowLeft = 0;
+    this.zoomPunch = 0;
+    this.lastInput = null;
   }
 
   create(): void {
@@ -101,7 +119,6 @@ export class MatchScene extends Phaser.Scene {
 
     drawField(this);
 
-    // Giocatori.
     for (const p of this.state.players) {
       const t = p.team === 0 ? home : away;
       const def = t.players[p.idx % 5];
@@ -110,10 +127,11 @@ export class MatchScene extends Phaser.Scene {
       makePlayerTexture(this, key, kit, def.look, def.number);
       const shadow = this.add.image(0, 0, 'shadow').setDepth(10);
       const sprite = this.add.sprite(0, 0, key, 'idle').setOrigin(0.5, 1);
-      this.views.push({ shadow, sprite, tex: key, runDist: 0 });
+      this.views.push({ shadow, sprite, tex: key, runDist: 0, ghostT: 0 });
     }
 
     this.ring = this.add.image(0, 0, 'ring').setDepth(11).setTint(0xffd21f);
+    this.targetRing = this.add.image(0, 0, 'ring').setDepth(11).setTint(0x2ec4b6).setVisible(false);
     this.arrow = this.add.image(0, 0, 'arrow').setDepth(6000).setTint(0xffd21f);
     this.ballShadow = this.add.image(0, 0, 'shadow').setScale(0.45).setDepth(12);
     this.trail = this.add.graphics().setDepth(4900);
@@ -143,6 +161,7 @@ export class MatchScene extends Phaser.Scene {
     const cam = this.cameras.main;
     const bounds = worldBounds();
     cam.setBounds(bounds.x, bounds.y, bounds.width, bounds.height);
+    this.zoom = this.baseZoom();
     cam.setZoom(this.zoom);
     cam.setBackgroundColor('#0d0b14');
     this.camX = isoX(this.state.ball.x, this.state.ball.y);
@@ -158,9 +177,13 @@ export class MatchScene extends Phaser.Scene {
     if (this.scene.isActive('hud')) this.scene.stop('hud');
     this.scene.launch('hud');
     this.scene.bringToTop('hud');
-    this.events.once('shutdown', () => {
-      this.input.off('pointerdown', unlockAudio);
-    });
+    this.events.once('shutdown', () => this.input.off('pointerdown', unlockAudio));
+  }
+
+  /** Zoom in base all'altezza dello schermo: su telefono la camera è più vicina. */
+  private baseZoom(): number {
+    const { h } = view(this);
+    return h / (isTouchDevice() ? VISIBLE_H_TOUCH : VISIBLE_H_DESKTOP);
   }
 
   // --- Ciclo ---------------------------------------------------------------------
@@ -180,13 +203,22 @@ export class MatchScene extends Phaser.Scene {
       my,
       sprint: si.sprint,
       pass: si.pass,
+      lob: si.lob,
+      through: si.through,
       shoot: si.shoot,
       feint: si.feint,
       skill: si.skill,
       switch: si.switch,
     };
+    this.lastInput = inp;
 
-    this.acc += Math.min(delta, 250);
+    // Rallentatore delle skill: torna a velocità normale con dolcezza.
+    if (this.slowLeft > 0) {
+      this.slowLeft -= delta;
+      if (this.slowLeft <= 0) this.tweens.add({ targets: this, timeScale: 1, duration: 220, ease: 'Quad.In' });
+    }
+
+    this.acc += Math.min(delta, 250) * this.timeScale;
     let steps = 0;
     while (this.acc >= STEP_MS && steps < 8) {
       this.capturePrev();
@@ -198,7 +230,6 @@ export class MatchScene extends Phaser.Scene {
     }
     if (steps === 8) this.acc = 0;
 
-    // Fine partita: breve attesa poi riepilogo.
     if (this.state.phase === 'ended') {
       if (this.endTimer < 0) this.endTimer = 2200;
       this.endTimer -= delta;
@@ -220,7 +251,6 @@ export class MatchScene extends Phaser.Scene {
     this.scene.bringToTop('pause');
   }
 
-  /** Chiamato dalla pausa alla ripresa: ignora il tasto pausa ancora premuto. */
   resumeFromPause(): void {
     this.pausePrev = true;
   }
@@ -246,7 +276,13 @@ export class MatchScene extends Phaser.Scene {
     if (this.history.length > REPLAY_LEN + 40) this.history.shift();
   }
 
-  // --- Eventi → suoni ed effetti (game feel) ------------------------------------
+  // --- Eventi → suoni ed effetti ------------------------------------------------
+
+  private slowMo(scale: number, ms: number): void {
+    this.tweens.killTweensOf(this);
+    this.timeScale = scale;
+    this.slowLeft = ms;
+  }
 
   private onEvent(e: MatchEvent): void {
     const s = this.state;
@@ -255,7 +291,7 @@ export class MatchScene extends Phaser.Scene {
       case 'shot': {
         const pw = e.power ?? 0;
         sfx.kick(pw);
-        if (pw > 22) this.addTrauma(0.22 + (pw - 22) * 0.04); // scossa leggera sul tiro forte
+        if (pw > 22) this.addTrauma(0.22 + (pw - 22) * 0.04);
         this.puff(e.x, e.y, 6);
         this.popBall();
         break;
@@ -275,23 +311,42 @@ export class MatchScene extends Phaser.Scene {
         sfx.post();
         this.addTrauma(0.35);
         break;
+      case 'slide':
+        sfx.whoosh();
+        break;
       case 'tackle':
+      case 'steal':
         sfx.tackle();
-        this.addTrauma(0.12);
-        this.puff(e.x, e.y, 8);
+        this.addTrauma(e.skill === 'slide' || e.skill === 'shoulder' ? 0.22 : 0.12);
+        this.puff(e.x, e.y, 10);
+        break;
+      case 'foul':
+        sfx.tackle();
+        this.addTrauma(0.2);
+        this.puff(e.x, e.y, 10);
         break;
       case 'tackleMiss':
+      case 'heavyTouch':
         this.puff(e.x, e.y, 4);
         break;
       case 'save':
         sfx.save();
-        this.addTrauma(0.25);
+        this.addTrauma(0.3);
+        this.puff(e.x, e.y, 8);
         break;
       case 'catch':
         sfx.save();
         break;
-      case 'feint':
+      case 'dive':
+        sfx.whoosh();
+        break;
       case 'special':
+        // Skill: nome grande (HUD), rallentatore breve, zoom e scia.
+        sfx.whoosh();
+        this.slowMo(0.3, 480);
+        this.zoomPunch = 0.35;
+        break;
+      case 'feint':
       case 'dodge':
         sfx.whoosh();
         break;
@@ -302,13 +357,14 @@ export class MatchScene extends Phaser.Scene {
         sfx.crowd();
         sfx.whistle(false);
         this.addTrauma(0.55);
+        this.slowMo(0.4, 450);
         this.replay = this.history.slice(-REPLAY_LEN);
         const team = e.team ?? 0;
         const kit = s.teams[team].kit;
-        this.confetti.setParticleTint(kit.shirt);
         const gx = team === 0 ? FIELD.length : 0;
         const x = isoX(gx, 11);
         const y = isoY(gx, 11, 1.5);
+        this.confetti.setParticleTint(kit.shirt);
         this.confetti.explode(40, x, y);
         this.confetti.setParticleTint(kit.trim);
         this.confetti.explode(30, x, y);
@@ -350,15 +406,16 @@ export class MatchScene extends Phaser.Scene {
       const t = (s.phaseTime - REPLAY_START) * 60 * REPLAY_SPEED;
       const i = Math.min(this.replay.length - 1, Math.floor(t));
       const fr = this.replay[i];
+      const pf = this.replay[Math.max(0, i - 1)];
       s.players.forEach((p, k) => {
         const o = k * 5;
         const kind = ACTION_CODES[fr.p[o + 4]] ?? 'none';
-        const prevFr = this.replay![Math.max(0, i - 1)];
-        const moving = Math.hypot(fr.p[o] - prevFr.p[o], fr.p[o + 1] - prevFr.p[o + 1]) * 60 > 0.6;
-        this.drawPlayer(p, fr.p[o], fr.p[o + 1], fr.p[o + 2], fr.p[o + 3], kind, moving, Math.hypot(fr.p[o] - prevFr.p[o], fr.p[o + 1] - prevFr.p[o + 1]));
+        const step = Math.hypot(fr.p[o] - pf.p[o], fr.p[o + 1] - pf.p[o + 1]);
+        this.drawPlayer(p, fr.p[o], fr.p[o + 1], fr.p[o + 2], fr.p[o + 3], kind, step * 60 > 0.6, step, true);
       });
       this.drawBall(fr.b[0], fr.b[1], fr.b[2], fr.speed, false);
       this.ring.setVisible(false);
+      this.targetRing.setVisible(false);
       this.arrow.setVisible(false);
       this.overlay.clear();
       return;
@@ -368,7 +425,7 @@ export class MatchScene extends Phaser.Scene {
       const x = Phaser.Math.Linear(this.prev[i * 2] ?? p.x, p.x, alpha);
       const y = Phaser.Math.Linear(this.prev[i * 2 + 1] ?? p.y, p.y, alpha);
       const sp = Math.hypot(p.vx, p.vy);
-      this.drawPlayer(p, x, y, p.fx, p.fy, p.action.kind, sp > 0.6, sp * DT);
+      this.drawPlayer(p, x, y, p.fx, p.fy, p.action.kind, sp > 0.6, sp * DT, false);
     });
 
     const b = s.ball;
@@ -376,26 +433,73 @@ export class MatchScene extends Phaser.Scene {
     const by = Phaser.Math.Linear(this.prevBall[1], b.y, alpha);
     const bz = Phaser.Math.Linear(this.prevBall[2], b.z, alpha);
     this.drawBall(bx, by, bz, Math.hypot(b.vx, b.vy), b.owner >= 0);
+    this.drawIndicators();
+  }
 
-    // Indicatore del giocatore controllato e barra di carica.
+  /** Anello sul giocatore controllato, compagno che riceverà, mirino del tiro, barra di carica. */
+  private drawIndicators(): void {
+    const s = this.state;
     const c = s.controllers.find((k) => k.id === LOCAL_ID);
-    this.overlay.clear();
-    if (c && c.player >= 0 && s.phase !== 'goal') {
-      const p = s.players[c.player];
-      const v = this.views[c.player];
-      const x = v.sprite.x;
-      const y = v.sprite.y;
-      this.ring.setVisible(true).setPosition(x, y);
-      this.arrow.setVisible(true).setPosition(x, y - FRAME_H - 8 + Math.sin(this.time.now / 140) * 2);
-      if (p.chargeKind !== 'none') {
-        const w = 26;
-        const col = p.chargeKind === 'pass' ? 0x2ec4b6 : p.charge > 0.8 ? 0xff4d6d : p.charge > 0.45 ? 0xffd21f : 0x7cff6b;
-        this.overlay.fillStyle(0x0d0b14, 0.85).fillRect(x - w / 2 - 1, y - FRAME_H - 22, w + 2, 6);
-        this.overlay.fillStyle(col, 1).fillRect(x - w / 2, y - FRAME_H - 21, w * p.charge, 4);
-      }
-    } else {
+    const o = this.overlay.clear();
+    this.targetRing.setVisible(false);
+    if (!c || c.player < 0 || s.phase === 'goal') {
       this.ring.setVisible(false);
       this.arrow.setVisible(false);
+      return;
+    }
+    const p = s.players[c.player];
+    const v = this.views[c.player];
+    const x = v.sprite.x;
+    const y = v.sprite.y;
+    this.ring.setVisible(true).setPosition(x, y);
+    this.arrow.setVisible(true).setPosition(x, y - FRAME_H - 8 + Math.sin(this.time.now / 140) * 2);
+    if (s.ball.owner !== p.idx) return;
+
+    const inp = this.lastInput;
+    const mx = inp?.mx ?? 0;
+    const my = inp?.my ?? 0;
+    const hasDir = Math.hypot(mx, my) > 0.2;
+
+    // Compagno che riceverebbe il passaggio adesso.
+    if (p.chargeKind !== 'shot') {
+      const t = pickPassTarget(s, p, hasDir ? mx : p.fx, hasDir ? my : p.fy);
+      if (t >= 0) {
+        const tv = this.views[t];
+        this.targetRing.setVisible(true).setPosition(tv.sprite.x, tv.sprite.y).setAlpha(p.chargeKind === 'pass' ? 1 : 0.55);
+      }
+    }
+
+    if (p.chargeKind === 'none') return;
+    const w = 28;
+    const col = p.chargeKind === 'pass' ? 0x2ec4b6 : p.charge > 0.8 ? 0xff4d6d : p.charge > 0.45 ? 0xffd21f : 0x7cff6b;
+    o.fillStyle(0x0d0b14, 0.85).fillRect(x - w / 2 - 1, y - FRAME_H - 24, w + 2, 6);
+    o.fillStyle(col, 1).fillRect(x - w / 2, y - FRAME_H - 23, w * p.charge, 4);
+
+    if (p.chargeKind === 'shot') {
+      // Mirino sulla porta e traiettoria tratteggiata: dove andrà il tiro.
+      const aim = shotAimFromInput(mx, my);
+      const [gx, gy] = shotTarget(p, aim);
+      const h = 0.25 + p.charge * p.charge * 0.95;
+      const tx = isoX(gx, gy);
+      const ty = isoY(gx, gy, h);
+      const sx = isoX(p.x, p.y);
+      const sy = isoY(p.x, p.y, 0.2);
+      o.lineStyle(2, col, 0.75);
+      const n = 12;
+      for (let i = 0; i < n; i += 2) {
+        const a = i / n;
+        const b = (i + 1) / n;
+        const arc = (t: number) => Math.sin(Math.PI * t) * 18 * p.charge;
+        o.lineBetween(
+          Phaser.Math.Linear(sx, tx, a),
+          Phaser.Math.Linear(sy, ty, a) - arc(a),
+          Phaser.Math.Linear(sx, tx, b),
+          Phaser.Math.Linear(sy, ty, b) - arc(b),
+        );
+      }
+      const r = 7 + (1 - p.charge) * 5;
+      o.lineStyle(2, col, 1).strokeCircle(tx, ty, r);
+      o.lineBetween(tx - r - 4, ty, tx + r + 4, ty).lineBetween(tx, ty - r - 4, tx, ty + r + 4);
     }
   }
 
@@ -408,67 +512,109 @@ export class MatchScene extends Phaser.Scene {
     kind: string,
     moving: boolean,
     step: number,
+    replay: boolean,
   ): void {
     const v = this.views[p.idx];
     const sx = isoX(x, y);
     const sy = isoY(x, y);
     const [dx, dy] = worldToScreenDir(fx, fy);
     const back = dy < -0.5;
+    const a = p.action;
+    const prog = a.dur > 0 ? Math.min(1, a.t / a.dur) : 0;
     let frame: FrameName = 'idle';
     let lift = 0;
     let flip = dx < 0;
     let angle = 0;
+    const now = this.time.now;
     switch (kind) {
       case 'kick':
-      case 'rabona':
         frame = 'kick';
         break;
+      case 'rabona':
+        frame = prog < 0.6 ? 'rabona' : 'kick';
+        break;
       case 'tackle':
+        frame = 'tackle';
+        angle = (flip ? -1 : 1) * 10;
+        break;
+      case 'shoulder':
+        frame = 'run2';
+        angle = (flip ? -1 : 1) * 20; // si appoggia con la spalla
+        break;
+      case 'slide':
         frame = 'slide';
+        if (!replay && Math.floor(now / 50) % 2 === 0) this.dust.explode(1, sx, sy);
         break;
+      case 'fall':
       case 'stunned':
-        frame = p.stun > 0.5 || kind === 'stunned' ? 'down' : 'idle';
-        break;
-      case 'dive':
         frame = 'down';
-        lift = 10;
-        flip = p.action.dy * (p.team === 0 ? 1 : -1) < 0;
         break;
+      case 'stagger':
+        // Barcolla: fuori tempo, o "caviglie rotte" dopo una skill.
+        frame = 'idle';
+        angle = Math.sin(now / 60) * 12;
+        break;
+      case 'dive': {
+        frame = 'down';
+        lift = Math.sin(Math.PI * prog) * 16 + 4;
+        // In isometrico un tuffo verso +y va in basso a destra.
+        flip = (a.dy || 1) < 0;
+        break;
+      }
       case 'celebrate':
         frame = 'cheer';
-        lift = Math.abs(Math.sin(this.time.now / 110)) * 6;
+        lift = Math.abs(Math.sin(now / 110)) * 6;
         break;
       case 'veronica': {
-        // Giro su se stesso: alterna fronte/spalle e specchia.
-        const ph = Math.floor(this.time.now / 70) % 4;
+        const ph = Math.floor(now / 60) % 4;
         frame = ph % 2 === 0 ? 'spin' : 'idle';
         flip = ph >= 2;
         break;
       }
       case 'elastico':
-      case 'feint':
-      case 'tunnel':
-        frame = 'run2';
-        angle = (p.action.dx > 0 ? 1 : -1) * 8;
+        frame = prog < 0.4 ? 'kick' : 'run2';
+        flip = prog < 0.4 ? !flip : flip;
+        angle = (prog < 0.4 ? -1 : 1) * 10;
         break;
       case 'sombrero':
-        frame = 'kick';
+        frame = prog < 0.35 ? 'kick' : 'run1';
+        lift = prog < 0.35 ? 3 : 0;
+        break;
+      case 'tunnel':
+      case 'feint':
+        frame = prog < 0.3 ? 'kick' : 'run2';
+        angle = (a.side || 1) * 8;
         break;
       default:
         if (moving) {
           v.runDist += step;
           frame = Math.floor(v.runDist * 2.4) % 2 === 0 ? 'run1' : 'run2';
           lift = Math.floor(v.runDist * 4.8) % 2 === 0 ? 1 : 0;
-        } else {
-          frame = 'idle';
         }
     }
-    const name = back && frame !== 'down' && frame !== 'slide' ? `${frame}_b` : frame;
+    const lying = frame === 'down' || frame === 'slide';
+    const name = back && !lying ? `${frame}_b` : frame;
     v.sprite.setFrame(name).setPosition(sx, sy - lift).setFlipX(flip).setAngle(angle);
     v.sprite.setDepth(isoDepth(x, y) + 0.5);
-    // Lampeggia quando è "piantato" da una skill o da un contrasto.
-    v.sprite.setAlpha(p.stun > 0 && kind !== 'stunned' && Math.floor(this.time.now / 80) % 2 === 0 ? 0.55 : 1);
-    v.shadow.setPosition(sx, sy).setDepth(isoDepth(x, y) - 0.5);
+    v.sprite.setAlpha(1);
+    v.shadow.setPosition(sx, sy).setDepth(isoDepth(x, y) - 0.5).setScale(lift > 4 ? 0.8 : 1);
+
+    // Scia "fantasma" durante le skill: si vede bene il movimento.
+    if (!replay && SKILL_KINDS.has(kind)) {
+      v.ghostT -= this.game.loop.delta;
+      if (v.ghostT <= 0) {
+        v.ghostT = 45;
+        const ghost = this.add
+          .image(v.sprite.x, v.sprite.y, v.tex, name)
+          .setOrigin(0.5, 1)
+          .setFlipX(flip)
+          .setAngle(angle)
+          .setDepth(v.sprite.depth - 0.1)
+          .setTint(0x2ec4b6)
+          .setAlpha(0.55);
+        this.tweens.add({ targets: ghost, alpha: 0, duration: 260, onComplete: () => ghost.destroy() });
+      }
+    }
   }
 
   private drawBall(x: number, y: number, z: number, speed: number, owned: boolean): void {
@@ -480,14 +626,13 @@ export class MatchScene extends Phaser.Scene {
     this.ballShadow.setPosition(isoX(x, y), isoY(x, y)).setScale(sh).setAlpha(Math.max(0.3, 1 - z * 0.15));
     this.ballShadow.setDepth(isoDepth(x, y) - 0.6);
 
-    // Scia: punti recenti, più lunga e "infuocata" sui tiri potenti.
     if (!owned && speed > 7) {
       this.trailPts.push({ x: sx, y: sy - 5, fire: speed > 21 || this.lastBallSpeed > 21 });
     } else if (this.trailPts.length) {
       this.trailPts.shift();
     }
     this.lastBallSpeed = owned ? 0 : speed;
-    if (this.trailPts.length > 14) this.trailPts.shift();
+    if (this.trailPts.length > 16) this.trailPts.shift();
     this.trail.clear();
     const n = this.trailPts.length;
     for (let i = 1; i < n; i++) {
@@ -503,43 +648,45 @@ export class MatchScene extends Phaser.Scene {
   private updateCamera(dt: number): void {
     const s = this.state;
     const cam = this.cameras.main;
+    const base = this.baseZoom();
     let tx: number;
     let ty: number;
-    let tz = BASE_ZOOM;
+    let tz = base;
     if (this.replayActive) {
       tx = this.ball.x;
       ty = this.ball.y;
-      tz = 1.75;
+      tz = base * 1.12;
     } else if (s.phase === 'goal' && s.lastGoal && s.lastGoal.scorer >= 0) {
       const v = this.views[s.lastGoal.scorer];
       tx = v.sprite.x;
       ty = v.sprite.y - 20;
-      tz = 1.95;
+      tz = base * 1.25;
     } else {
-      // Palla al centro con un po' di anticipo sul giocatore controllato.
+      // Palla al centro, un po' verso il giocatore controllato e in avanti nella direzione d'attacco.
       const c = s.controllers.find((k) => k.id === LOCAL_ID);
-      const bx = this.ball.x;
-      const by = this.ball.y;
-      tx = bx;
-      ty = by;
+      tx = this.ball.x;
+      ty = this.ball.y;
       if (c && c.player >= 0) {
         const v = this.views[c.player];
-        tx = bx * 0.75 + v.sprite.x * 0.25;
-        ty = by * 0.75 + v.sprite.y * 0.25;
+        tx = tx * 0.7 + v.sprite.x * 0.3;
+        ty = ty * 0.7 + v.sprite.y * 0.3;
       }
       const b = s.ball;
-      const [lx, ly] = worldToScreenDir(b.vx, b.vy);
-      tx += Phaser.Math.Clamp(lx * 0.25, -60, 60);
-      ty += Phaser.Math.Clamp(ly * 0.25, -40, 40);
+      const owner = b.owner >= 0 ? s.players[b.owner] : null;
+      const ad = owner ? attackDir(owner.team) : 0;
+      const [lx, ly] = worldToScreenDir(b.vx * 0.25 + ad * 2.5, b.vy * 0.25);
+      tx += Phaser.Math.Clamp(lx, -70, 70);
+      ty += Phaser.Math.Clamp(ly, -45, 45);
     }
+    if (this.zoomPunch > 0) this.zoomPunch = Math.max(0, this.zoomPunch - dt * 0.9);
     const k = 1 - Math.exp(-dt * 5);
     this.camX += (tx - this.camX) * k;
     this.camY += (ty - this.camY) * k;
     this.zoom += (tz - this.zoom) * (1 - Math.exp(-dt * 3));
-    cam.setZoom(this.zoom);
+    cam.setZoom(this.zoom * (1 + this.zoomPunch * 0.25));
     cam.centerOn(this.camX, this.camY);
 
-    // Scossa da "trauma" (skill game-feel): somma di seni, ampiezza = trauma², decade nel tempo reale.
+    // Scossa da "trauma" (skill game-feel): somma di seni, ampiezza = trauma², tempo reale.
     if (this.trauma > 0) {
       this.trauma = Math.max(0, this.trauma - dt * 1.6);
       this.shakeT += dt * 30;
@@ -549,9 +696,8 @@ export class MatchScene extends Phaser.Scene {
     }
   }
 
-  /** Utile al test automatico e al debug da console. */
   debugInfo() {
     const s = this.state;
-    return { phase: s.phase, score: s.score, clock: s.clock, tick: s.tick, goalPhase: RULES.goalPhaseSec };
+    return { phase: s.phase, score: s.score, clock: s.clock, tick: s.tick, zoom: this.cameras.main.zoom, timeScale: this.timeScale };
   }
 }

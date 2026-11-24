@@ -1,7 +1,7 @@
 // Schermata di fine partita: risultato e statistiche, poi rivincita o menu.
 import Phaser from 'phaser';
 import type { MatchState } from '../../shared/types';
-import { COLORS, GAME_H, GAME_W, button, hexColor, text } from '../ui';
+import { COLORS, button, hexColor, restartOnResize, text, view } from '../ui';
 import { InputManager } from '../input/InputManager';
 import { MenuNav } from '../input/MenuNav';
 import type { MatchData } from './MatchScene';
@@ -26,21 +26,26 @@ export class EndScene extends Phaser.Scene {
 
   create(): void {
     const s = this.s;
+    const { w: GAME_W, h: GAME_H } = view(this);
+    const k = Math.min(1, GAME_H / 540);
+    this.btns = [];
+    restartOnResize(this, { state: this.s, data: this.data_ });
     const g = this.add.graphics();
     g.fillGradientStyle(0x2a1d45, 0x2a1d45, 0x0d0b14, 0x0d0b14, 1).fillRect(0, 0, GAME_W, GAME_H);
 
     const [a, b] = s.score;
     const title = a > b ? 'VITTORIA!' : a < b ? 'SCONFITTA' : 'PAREGGIO';
     const col = a > b ? hexColor(COLORS.yellow) : a < b ? '#ff4d6d' : '#ffffff';
-    const t = text(this, GAME_W / 2, 60, title, 34, col);
+    const t = text(this, GAME_W / 2, 60 * k, title, 34, col);
     this.tweens.add({ targets: t, scale: { from: 0.3, to: 1 }, duration: 500, ease: 'Back.Out' });
 
-    text(this, GAME_W / 2 - 70, 125, s.teams[0].name.toUpperCase(), 12, '#ffffff', 1);
-    text(this, GAME_W / 2 + 70, 125, s.teams[1].name.toUpperCase(), 12, '#ffffff', 0);
-    text(this, GAME_W / 2, 125, `${a} - ${b}`, 24, hexColor(COLORS.yellow));
+    text(this, GAME_W / 2 - 70, 125 * k, s.teams[0].name.toUpperCase(), 12, '#ffffff', 1);
+    text(this, GAME_W / 2 + 70, 125 * k, s.teams[1].name.toUpperCase(), 12, '#ffffff', 0);
+    text(this, GAME_W / 2, 125 * k, `${a} - ${b}`, 24, hexColor(COLORS.yellow));
 
     const total = s.stats[0].possessionTicks + s.stats[1].possessionTicks || 1;
     const rows: [string, number | string, number | string][] = [
+      ['FALLI', s.stats[0].fouls, s.stats[1].fouls],
       ['POSSESSO', `${Math.round((s.stats[0].possessionTicks / total) * 100)}%`, `${Math.round((s.stats[1].possessionTicks / total) * 100)}%`],
       ['TIRI', s.stats[0].shots, s.stats[1].shots],
       ['IN PORTA', s.stats[0].onTarget, s.stats[1].onTarget],
@@ -49,16 +54,16 @@ export class EndScene extends Phaser.Scene {
       ['CONTRASTI VINTI', s.stats[0].tackles, s.stats[1].tackles],
     ];
     const box = this.add.graphics();
-    box.fillStyle(COLORS.panel, 0.9).fillRect(GAME_W / 2 - 280, 158, 560, rows.length * 30 + 16);
+    box.fillStyle(COLORS.panel, 0.9).fillRect(GAME_W / 2 - 280, 158 * k, 560, rows.length * 30 * k + 16);
     rows.forEach(([label, h, w], i) => {
-      const y = 180 + i * 30;
+      const y = 180 * k + i * 30 * k;
       text(this, GAME_W / 2 - 200, y, String(h), 12, '#ffffff');
       text(this, GAME_W / 2, y, label, 9, '#8a83a0');
       text(this, GAME_W / 2 + 200, y, String(w), 12, '#ffffff');
     });
 
-    this.btns.push(button(this, GAME_W / 2 - 120, GAME_H - 70, 210, 52, 'RIVINCITA', () => this.again()));
-    this.btns.push(button(this, GAME_W / 2 + 120, GAME_H - 70, 210, 52, 'MENU', () => this.scene.start('menu')));
+    this.btns.push(button(this, GAME_W / 2 - 120, GAME_H - 46, 210, 48, 'RIVINCITA', () => this.again()));
+    this.btns.push(button(this, GAME_W / 2 + 120, GAME_H - 46, 210, 48, 'MENU', () => this.scene.start('menu')));
     const input = new InputManager(this);
     input.bindEnter(this);
     this.nav = new MenuNav(input);

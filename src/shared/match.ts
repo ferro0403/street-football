@@ -2,8 +2,9 @@
 // stessi input produce lo stesso stato. Gira identica nel browser e (in futuro) su un server Node.
 import { CENTER_X, CENTER_Y, DT, FIELD, PHYS, RULES, PLAYERS_PER_TEAM } from './constants';
 import { clamp, dist, len, norm } from './math';
-import { seedFrom } from './rng';
+import { chance, seedFrom } from './rng';
 import {
+  EXPOSED_OFFSET,
   SPRINT_MULT,
   STAMINA_DRAIN,
   STAMINA_REGEN,
@@ -13,16 +14,35 @@ import {
   dribbleSpeedMult,
   overall,
   runSpeed,
+  stealChance,
+  turnLossChance,
   turnRate,
 } from './stats';
 import { attachBall, stepBall } from './ball';
-import { feint, pass, pickPassTarget, resolveTackle, setAction, shoot, special, startTackle } from './actions';
+import {
+  endSlide,
+  feint,
+  groundPass,
+  lobPass,
+  pickPassTarget,
+  resolveTackle,
+  setAction,
+  shoot,
+  shotAimFromInput,
+  skillTick,
+  special,
+  startSlide,
+  startTackle,
+  throughPass,
+  updateSlide,
+} from './actions';
 import { aiFieldPlayer, type Intent } from './ai';
 import { updateKeeper } from './keeper';
 import type {
   ControllerState,
   InputMap,
   MatchState,
+  PlayerAction,
   PlayerInput,
   PlayerState,
   TeamDef,
@@ -36,6 +56,8 @@ export const NEUTRAL_INPUT: PlayerInput = Object.freeze({
   my: 0,
   sprint: false,
   pass: false,
+  lob: false,
+  through: false,
   shoot: false,
   feint: false,
   skill: false,
@@ -50,6 +72,8 @@ export interface MatchConfig {
   /** Giocatori umani: id del controller e squadra. Nessuno = CPU contro CPU. */
   humans?: { id: string; team: TeamIndex }[];
 }
+
+const noAction = (): PlayerAction => ({ kind: 'none', t: 0, dur: 0, dx: 0, dy: 0, done: false, ax: 0, ay: 0, side: 0, target: -1 });
 
 function teamMeta(t: TeamDef): TeamMeta {
   const ovr = Math.round(t.players.reduce((a, p) => a + overall(p.stats, p.role), 0) / t.players.length);
@@ -81,14 +105,18 @@ export function createMatch(cfg: MatchConfig): MatchState {
         fx: ti === 0 ? 1 : -1,
         fy: 0,
         stamina: 1,
-        action: { kind: 'none', t: 0, dur: 0, dx: 0, dy: 0, done: false },
+        action: noAction(),
         stun: 0,
         evade: 0,
         skillCd: 0,
         feintCd: 0,
         tackleCd: 0,
+        slideCd: 0,
         charge: 0,
         chargeKind: 'none',
+        dribble: 0,
+        ballOff: 0,
+        touchCd: 0,
         human: null,
         ai: { think: 0, tx: 0, ty: 0, score: -1e9 },
         gk: { react: 0, seenShot: -1, rolledShot: -1, hold: 0 },
@@ -123,6 +151,12 @@ export function createMatch(cfg: MatchConfig): MatchState {
       shotId: 0,
       shotTeam: -1,
       shotActive: false,
+      shotX: 0,
+      shotY: 0,
+      spin: 0,
+      passKind: 0,
+      passTx: 0,
+      passTy: 0,
       inGoal: -1,
     },
     controllers: [],
@@ -137,7 +171,7 @@ export function createMatch(cfg: MatchConfig): MatchState {
 }
 
 function emptyStats() {
-  return { shots: 0, onTarget: 0, saves: 0, tackles: 0, passes: 0, possessionTicks: 0 };
+  return { shots: 0, onTarget: 0, saves: 0, tackles: 0, passes: 0, fouls: 0, possessionTicks: 0 };
 }
 
 /** Aggiunge un controller umano (es. un giocatore in più che si collega). */
@@ -168,7 +202,7 @@ function assign(s: MatchState, c: ControllerState, idx: number): void {
 // --- Calcio d'inizio ---------------------------------------------------------------
 
 const KICKOFF_SPOTS: [number, number][] = [
-  [0.9, CENTER_Y], // portiere (distanza dalla propria linea)
+  [0.9, CENTER_Y],
   [7, CENTER_Y],
   [12, FIELD.width * 0.22],
   [12, FIELD.width * 0.78],
@@ -192,6 +226,8 @@ export function resetKickoff(s: MatchState, team: TeamIndex): void {
     kicker: -1,
     kickCd: 0,
     passTarget: -1,
+    passKind: 0,
+    spin: 0,
     shotActive: false,
     shotTeam: -1,
     inGoal: -1,
@@ -202,24 +238,21 @@ export function resetKickoff(s: MatchState, team: TeamIndex): void {
     const [ox, oy] = KICKOFF_SPOTS[i];
     p.x = ownGoalX(p.team) + dir * ox;
     p.y = oy;
-    if (i === 4) {
-      // L'attaccante di chi batte sta sulla palla, l'altro a distanza.
-      p.x = p.team === team ? CENTER_X - dir * 0.6 : CENTER_X - dir * 4;
-    }
+    if (i === 4) p.x = p.team === team ? CENTER_X - dir * 0.6 : CENTER_X - dir * 4;
     p.vx = p.vy = 0;
     p.fx = dir;
     p.fy = 0;
-    p.action = { kind: 'none', t: 0, dur: 0, dx: 0, dy: 0, done: false };
+    p.action = noAction();
     p.stun = p.evade = 0;
     p.charge = 0;
     p.chargeKind = 'none';
+    p.touchCd = 0;
     p.ai.think = 0;
     p.ai.score = -1e9;
     p.ai.tx = p.x;
     p.ai.ty = p.y;
     p.gk.hold = 0;
   }
-  // Il controller passa all'attaccante di chi batte (o al più vicino alla palla).
   for (const c of s.controllers) {
     const cands = s.players.filter((p) => p.team === c.team && p.role === 'field' && (!p.human || p.human === c.id));
     const others = s.controllers.filter((o) => o !== c && o.team === c.team).length;
@@ -237,14 +270,11 @@ export function stepMatch(s: MatchState, inputs: InputMap): void {
   s.phaseTime += DT;
 
   if (s.phase === 'ended') return;
-
   if (s.phase === 'goal') {
     stepGoalPhase(s, inputs);
     return;
   }
-
   if (s.phase === 'kickoff') {
-    // Tutti fermi; i controller restano registrati per i fronti di salita.
     for (const c of s.controllers) c.prev = { ...(inputs[c.id] ?? NEUTRAL_INPUT) };
     if (s.phaseTime >= RULES.kickoffFreezeSec) {
       s.phase = 'play';
@@ -257,21 +287,20 @@ export function stepMatch(s: MatchState, inputs: InputMap): void {
     return;
   }
 
-  // phase === 'play'
   s.clock = Math.max(0, s.clock - DT);
   const prevOwner = s.ball.owner;
 
   updateControllers(s, inputs);
 
+  let ownerSprinting = false;
   for (const p of s.players) {
     tickTimers(p);
-    let intent: Intent;
     if (p.role === 'gk') {
       const k = updateKeeper(s, p);
-      intent = { mx: k.mx, my: k.my, sprint: false };
-      movePlayer(s, p, intent, k.speed);
+      movePlayer(s, p, { mx: k.mx, my: k.my, sprint: false }, k.speed);
       continue;
     }
+    let intent: Intent;
     if (p.human) {
       const c = s.controllers.find((x) => x.id === p.human)!;
       intent = humanIntent(s, p, inputs[c.id] ?? NEUTRAL_INPUT, c.prev);
@@ -279,17 +308,19 @@ export function stepMatch(s: MatchState, inputs: InputMap): void {
       intent = aiFieldPlayer(s, p);
     }
     resolveTackle(s, p);
-    movePlayer(s, p, intent, 0);
+    updateSlide(s, p);
+    if (s.ball.owner === p.idx) ownerSprinting = intent.sprint && p.stamina > 0.02;
+    if (!skillTick(s, p)) movePlayer(s, p, intent, 0);
   }
   for (const c of s.controllers) c.prev = { ...(inputs[c.id] ?? NEUTRAL_INPUT) };
 
   separatePlayers(s);
 
-  // Palla.
   const b = s.ball;
   if (b.kickCd > 0) b.kickCd -= DT;
   if (b.owner >= 0) {
-    attachBall(s);
+    attachBall(s, ownerSprinting);
+    contestExposedBall(s);
   } else {
     const scored = stepBall(s);
     if (scored >= 0) {
@@ -299,6 +330,11 @@ export function stepMatch(s: MatchState, inputs: InputMap): void {
     tryPossession(s);
   }
   if (b.shotActive && b.owner < 0 && len(b.vx, b.vy) < 4) b.shotActive = false;
+  // Un passaggio che si ferma lontano dal compagno non è più "suo".
+  if (b.owner < 0 && b.passTarget >= 0 && len(b.vx, b.vy) < 0.5 && b.z < 0.05) {
+    b.passTarget = -1;
+    b.passKind = 0;
+  }
 
   if (b.owner >= 0) s.stats[s.players[b.owner].team].possessionTicks += 1;
   if (b.owner !== prevOwner && b.owner >= 0) {
@@ -318,13 +354,18 @@ function tickTimers(p: PlayerState): void {
   const a = p.action;
   if (a.kind !== 'none') {
     a.t += DT;
-    if (a.t >= a.dur && a.kind !== 'celebrate') a.kind = 'none';
+    if (a.t >= a.dur && a.kind !== 'celebrate') {
+      if (a.kind === 'slide') endSlide(p);
+      else p.action = noAction();
+    }
   }
   if (p.stun > 0) p.stun = Math.max(0, p.stun - DT);
   if (p.evade > 0) p.evade = Math.max(0, p.evade - DT);
   if (p.skillCd > 0) p.skillCd = Math.max(0, p.skillCd - DT);
   if (p.feintCd > 0) p.feintCd = Math.max(0, p.feintCd - DT);
   if (p.tackleCd > 0) p.tackleCd = Math.max(0, p.tackleCd - DT);
+  if (p.slideCd > 0) p.slideCd = Math.max(0, p.slideCd - DT);
+  if (p.touchCd > 0) p.touchCd = Math.max(0, p.touchCd - DT);
 }
 
 // --- Umani --------------------------------------------------------------------
@@ -341,9 +382,11 @@ function humanIntent(s: MatchState, p: PlayerState, inp: PlayerInput, prev: Play
   }
   const pressed = (k: keyof PlayerInput) => !!inp[k] && !prev[k];
   const released = (k: keyof PlayerInput) => !inp[k] && !!prev[k];
-  const hasBall = s.ball.owner === p.idx;
-  // Lato della finta: componente dell'input perpendicolare allo sguardo.
+  const b = s.ball;
+  const hasBall = b.owner === p.idx;
   const side = mx * -p.fy + my * p.fx;
+  const dirX = l > 0.2 ? mx : p.fx;
+  const dirY = l > 0.2 ? my : p.fy;
 
   if (hasBall && p.stun <= 0) {
     if (inp.shoot && p.chargeKind !== 'pass') {
@@ -354,22 +397,39 @@ function humanIntent(s: MatchState, p: PlayerState, inp: PlayerInput, prev: Play
       p.charge = Math.min(1, p.charge + DT / CHARGE_TIME);
     }
     if (released('shoot') && p.chargeKind === 'shot') {
-      // La mira è lo spostamento laterale (asse y del campo) dato dalla levetta.
-      const aim = clamp(my * 1.3, -1, 1);
-      shoot(s, p, 0.15 + p.charge * 0.85, aim);
+      const aim = shotAimFromInput(mx, my);
+      // Effetto a giro quando si mira all'angolo.
+      const curl = Math.abs(aim) > 0.35 ? Math.min(1, Math.abs(aim)) * 0.8 : 0;
+      shoot(s, p, 0.15 + p.charge * 0.85, aim, curl);
       return { mx, my, sprint: false };
     }
     if (released('pass') && p.chargeKind === 'pass') {
-      const lofted = p.charge > 0.3;
-      const t = pickPassTarget(s, p, l > 0.2 ? mx : p.fx, l > 0.2 ? my : p.fy);
+      const t = pickPassTarget(s, p, dirX, dirY);
+      const charge = p.charge;
       if (t >= 0) {
-        pass(s, p, t, lofted);
+        groundPass(s, p, t, charge);
         autoSwitchToReceiver(s, p.team, t);
       } else {
         p.charge = 0;
         p.chargeKind = 'none';
       }
       return { mx, my, sprint: false };
+    }
+    if (pressed('lob') && p.chargeKind === 'none') {
+      const t = pickPassTarget(s, p, dirX, dirY);
+      if (t >= 0) {
+        lobPass(s, p, t);
+        autoSwitchToReceiver(s, p.team, t);
+        return { mx, my, sprint: false };
+      }
+    }
+    if (pressed('through') && p.chargeKind === 'none') {
+      const t = pickPassTarget(s, p, dirX, dirY);
+      if (t >= 0) {
+        throughPass(s, p, t, l > 0.2 ? mx : 0, l > 0.2 ? my : 0);
+        autoSwitchToReceiver(s, p.team, t);
+        return { mx, my, sprint: false };
+      }
     }
     if (pressed('feint')) feint(s, p, side);
     if (pressed('skill')) special(s, p, side);
@@ -378,6 +438,18 @@ function humanIntent(s: MatchState, p: PlayerState, inp: PlayerInput, prev: Play
     p.chargeKind = 'none';
     if (s.phase === 'play' && p.stun <= 0) {
       if (pressed('shoot')) startTackle(s, p);
+      else if (pressed('lob')) startSlide(s, p);
+    }
+    // Calamita: se il passaggio è per me e non tocco la levetta, vado incontro alla palla.
+    if (b.owner < 0 && b.passTarget === p.idx && l < 0.2) {
+      const tx = b.passKind >= 2 ? b.passTx : b.x + b.vx * 0.25;
+      const ty = b.passKind >= 2 ? b.passTy : b.y + b.vy * 0.25;
+      const d = dist(p.x, p.y, tx, ty);
+      if (d > 0.3) {
+        const [ux, uy] = norm(tx - p.x, ty - p.y);
+        const k = Math.min(1, d / 0.6);
+        return { mx: ux * k, my: uy * k, sprint: b.passKind === 3 };
+      }
     }
   }
   return { mx, my, sprint: inp.sprint };
@@ -418,10 +490,8 @@ function soloController(s: MatchState, team: TeamIndex): ControllerState | null 
 
 function autoSwitchOnPossession(s: MatchState, team: TeamIndex, owner: number): void {
   const o = s.players[owner];
-  // La mia squadra prende palla: controllo chi ce l'ha.
   const mine = soloController(s, team);
   if (mine && o.role === 'field' && !o.human) assign(s, mine, owner);
-  // L'altra squadra l'ha persa: passo al più vicino alla palla, se il mio è lontano.
   const otherTeam: TeamIndex = team === 0 ? 1 : 0;
   const theirs = soloController(s, otherTeam);
   if (theirs) {
@@ -449,7 +519,18 @@ function autoSwitchToReceiver(s: MatchState, team: TeamIndex, target: number): v
 
 // --- Movimento -----------------------------------------------------------------
 
-const LOCKED: ReadonlySet<string> = new Set(['tackle', 'feint', 'elastico', 'veronica', 'tunnel', 'sombrero', 'dive']);
+const LOCKED: ReadonlySet<string> = new Set([
+  'tackle',
+  'shoulder',
+  'slide',
+  'feint',
+  'elastico',
+  'veronica',
+  'tunnel',
+  'sombrero',
+  'dive',
+  'fall',
+]);
 
 function movePlayer(s: MatchState, p: PlayerState, it: Intent, keeperSpeed: number): void {
   const hasBall = s.ball.owner === p.idx;
@@ -457,7 +538,7 @@ function movePlayer(s: MatchState, p: PlayerState, it: Intent, keeperSpeed: numb
   let mx = it.mx;
   let my = it.my;
 
-  if (p.stun > 0 || p.action.kind === 'stunned') {
+  if (p.stun > 0) {
     mx = 0;
     my = 0;
   }
@@ -472,7 +553,29 @@ function movePlayer(s: MatchState, p: PlayerState, it: Intent, keeperSpeed: numb
     p.stamina = Math.min(1, p.stamina + STAMINA_REGEN * DT);
   }
   if (hasBall) maxV *= dribbleSpeedMult(st);
-  if (p.chargeKind !== 'none') maxV *= 0.75; // caricando si rallenta
+  if (p.chargeKind !== 'none') maxV *= 0.75;
+
+  // Cambio di direzione brusco con la palla in corsa: si può perdere il controllo.
+  if (hasBall && !locked && p.touchCd <= 0 && (mx !== 0 || my !== 0)) {
+    const [ix, iy] = norm(mx, my);
+    const sp = len(p.vx, p.vy);
+    if (ix * p.fx + iy * p.fy < -0.15 && sp > runSpeed(st) * 0.75) {
+      p.touchCd = 0.6;
+      if (chance(s, turnLossChance(st, sprinting))) {
+        const b = s.ball;
+        b.owner = -1;
+        b.lastTouch = p.idx;
+        b.kicker = p.idx;
+        b.kickCd = 0.35;
+        b.passTarget = -1;
+        b.passKind = 0;
+        b.vx = p.vx * 1.15;
+        b.vy = p.vy * 1.15;
+        b.vz = 0.8;
+        s.events.push({ type: 'heavyTouch', p: p.idx, team: p.team, x: p.x, y: p.y });
+      }
+    }
+  }
 
   if (!locked) {
     const tvx = mx * maxV;
@@ -481,8 +584,9 @@ function movePlayer(s: MatchState, p: PlayerState, it: Intent, keeperSpeed: numb
     p.vx += (tvx - p.vx) * k;
     p.vy += (tvy - p.vy) * k;
   } else {
-    // Durante finte e contrasti conserva lo slancio e frena dolcemente.
-    const k = Math.min(1, 3 * DT);
+    // Scivolate, tuffi e finte conservano lo slancio e frenano.
+    const fr = p.action.kind === 'slide' ? 2.6 : p.action.kind === 'fall' ? 8 : p.action.kind === 'dive' ? 1.6 : 3;
+    const k = Math.min(1, fr * DT);
     p.vx -= p.vx * k;
     p.vy -= p.vy * k;
   }
@@ -507,7 +611,6 @@ function movePlayer(s: MatchState, p: PlayerState, it: Intent, keeperSpeed: numb
     p.vy = Math.min(0, p.vy);
   }
 
-  // Direzione dello sguardo: segue l'input (o la velocità) con un limite di rotazione.
   const sp = len(p.vx, p.vy);
   let dx = 0;
   let dy = 0;
@@ -520,7 +623,6 @@ function movePlayer(s: MatchState, p: PlayerState, it: Intent, keeperSpeed: numb
       p.fx = nx;
       p.fy = ny;
     } else {
-      // Inversione di 180° esatta: ruota di lato.
       const ox = p.fx;
       p.fx = -p.fy;
       p.fy = ox;
@@ -535,25 +637,22 @@ function separatePlayers(s: MatchState): void {
     for (let j = i + 1; j < ps.length; j++) {
       const a = ps[i];
       const b = ps[j];
+      // Chi è a terra in scivolata passa "sotto": niente spinta.
+      if (a.action.kind === 'slide' || b.action.kind === 'slide') continue;
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       const d2 = dx * dx + dy * dy;
       if (d2 >= minD * minD) continue;
       const d = Math.sqrt(d2);
-      let nx: number;
-      let ny: number;
-      if (d < 1e-6) {
-        nx = 1;
-        ny = 0;
-      } else {
-        nx = dx / d;
-        ny = dy / d;
-      }
-      const push = (minD - d) / 2;
-      a.x -= nx * push;
-      a.y -= ny * push;
-      b.x += nx * push;
-      b.y += ny * push;
+      const nx = d < 1e-6 ? 1 : dx / d;
+      const ny = d < 1e-6 ? 0 : dy / d;
+      // Chi è più forte sposta di più l'altro.
+      const wa = b.stats.strength / (a.stats.strength + b.stats.strength);
+      const push = minD - d;
+      a.x -= nx * push * wa;
+      a.y -= ny * push * wa;
+      b.x += nx * push * (1 - wa);
+      b.y += ny * push * (1 - wa);
     }
   }
   for (const p of ps) {
@@ -564,48 +663,77 @@ function separatePlayers(s: MatchState): void {
 
 // --- Possesso --------------------------------------------------------------------
 
+/** Palla "scoperta" (tocco lungo in scatto): un avversario vicino può soffiarla. */
+function contestExposedBall(s: MatchState): void {
+  const b = s.ball;
+  const c = s.players[b.owner];
+  if (c.ballOff <= EXPOSED_OFFSET || c.evade > 0) return;
+  for (const q of s.players) {
+    if (q.team === c.team || q.stun > 0) continue;
+    const r = q.role === 'gk' ? 0.75 : 0.55;
+    if (dist(q.x, q.y, b.x, b.y) > r) continue;
+    // Il portiere può farlo solo vicino alla sua porta.
+    if (q.role === 'gk' && Math.abs(q.x - ownGoalX(q.team)) > 5.5) continue;
+    if (chance(s, q.role === 'gk' ? 0.25 : stealChance(q.stats, c.stats))) {
+      b.owner = q.idx;
+      b.lastTouch = q.idx;
+      b.passTarget = -1;
+      b.passKind = 0;
+      s.stats[q.team].tackles += 1;
+      s.events.push({ type: 'steal', p: q.idx, team: q.team, x: b.x, y: b.y });
+      return;
+    }
+  }
+}
+
 function tryPossession(s: MatchState): void {
   const b = s.ball;
   if (b.inGoal >= 0) return;
   let best: PlayerState | null = null;
   let bd = Infinity;
   for (const p of s.players) {
-    if (p.stun > 0 || p.action.kind === 'dive') continue;
+    if (p.stun > 0 || p.action.kind === 'dive' || p.action.kind === 'slide') continue;
     if (p.idx === b.kicker && b.kickCd > 0) continue;
     const maxZ = p.role === 'gk' ? 2.2 : 1.0;
     if (b.z > maxZ) continue;
-    const r = p.role === 'gk' ? 0.85 : controlRadius(p.stats);
+    const r = p.role === 'gk' ? 0.8 : controlRadius(p.stats);
     const d = dist(p.x, p.y, b.x, b.y);
     if (d > r) continue;
-    // Il portiere non raccoglie i tiri: li gestisce la parata (keeper.ts).
-    if (p.role === 'gk' && b.shotActive && b.shotTeam !== p.team) continue;
-    // Il portiere usa le mani solo vicino alla propria porta.
-    if (p.role === 'gk' && Math.abs(p.x - ownGoalX(p.team)) > 5.5) continue;
-    if (d < bd) {
-      bd = d;
+    if (p.role === 'gk') {
+      // Niente tiri (li gestisce la parata) e solo vicino alla propria porta.
+      if (b.shotActive && b.shotTeam !== p.team) continue;
+      if (Math.abs(p.x - ownGoalX(p.team)) > 6) continue;
+    }
+    // Il destinatario del passaggio ha la precedenza a parità di distanza.
+    const dd = b.passTarget === p.idx ? d - 0.25 : d;
+    if (dd < bd) {
+      bd = dd;
       best = p;
     }
   }
   if (!best) return;
   const sp = len(b.vx - best.vx, b.vy - best.vy);
   if (best.role === 'field' && sp > controlMaxSpeed(best.stats) && b.passTarget !== best.idx) {
-    // Palla troppo veloce: tocco sporco, la palla rimbalza via.
     b.vx = -b.vx * 0.25 + best.vx * 0.5;
     b.vy = -b.vy * 0.25 + best.vy * 0.5;
     b.vz = 1.2;
+    b.spin = 0;
     b.lastTouch = best.idx;
     b.kicker = best.idx;
     b.kickCd = 0.2;
     b.passTarget = -1;
+    b.passKind = 0;
     b.shotActive = false;
     return;
   }
   b.owner = best.idx;
   b.lastTouch = best.idx;
   b.passTarget = -1;
+  b.passKind = 0;
   b.shotActive = false;
   b.kicker = -1;
-  // Si gira verso la direzione della palla.
+  b.spin = 0;
+  best.dribble = 0;
   if (best.role === 'field') {
     const [fx, fy] = norm(best.vx || best.fx, best.vy || best.fy);
     if (fx !== 0 || fy !== 0) {
@@ -637,18 +765,15 @@ function onGoal(s: MatchState, team: TeamIndex): void {
 }
 
 function stepGoalPhase(s: MatchState, inputs: InputMap): void {
-  // La palla finisce la sua corsa nella rete, i giocatori rallentano; l'autore esulta.
   stepBall(s);
   for (const p of s.players) {
     tickTimers(p);
     const scorerTeam = s.lastGoal?.team;
     let it: Intent = { mx: 0, my: 0, sprint: false };
     if (p.action.kind === 'celebrate' && s.phaseTime < 2.5) {
-      // Corsa di esultanza verso il centro.
       const [mx, my] = norm(CENTER_X - p.x, CENTER_Y - p.y);
       it = { mx: mx * 0.7, my: my * 0.7, sprint: false };
     } else if (p.team === scorerTeam && s.lastGoal && s.lastGoal.scorer >= 0 && p.role === 'field') {
-      // I compagni raggiungono chi ha segnato.
       const sc = s.players[s.lastGoal.scorer];
       if (dist(p.x, p.y, sc.x, sc.y) > 1.6) {
         const [mx, my] = norm(sc.x - p.x, sc.y - p.y);
@@ -673,12 +798,12 @@ function stepGoalPhase(s: MatchState, inputs: InputMap): void {
       return;
     }
     const conceded: TeamIndex = s.lastGoal?.team === 0 ? 1 : 0;
-    for (const p of s.players) if (p.action.kind === 'celebrate') p.action.kind = 'none';
+    for (const p of s.players) if (p.action.kind === 'celebrate') p.action = noAction();
     resetKickoff(s, conceded);
   }
 }
 
-/** Utility per test e debug: una copia profonda serializzabile. */
+/** Copia profonda serializzabile. */
 export function cloneState(s: MatchState): MatchState {
   return JSON.parse(JSON.stringify(s)) as MatchState;
 }
@@ -693,4 +818,3 @@ export function hashState(s: MatchState): string {
   }
   return (h >>> 0).toString(16);
 }
-

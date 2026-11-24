@@ -1,14 +1,16 @@
 import Phaser from 'phaser';
-import { COLORS, GAME_H, GAME_W, button, hexColor, text } from '../ui';
+import { COLORS, button, hexColor, restartOnResize, text, view } from '../ui';
 import { InputManager } from '../input/InputManager';
 import { MenuNav } from '../input/MenuNav';
 import type { MatchData, MatchScene } from './MatchScene';
+import { fullscreenSupported, isFullscreen, toggleFullscreen } from '../fullscreen';
+import { sfx } from '../fx/sfx';
 
 export class PauseScene extends Phaser.Scene {
   private data_!: MatchData;
   private nav!: MenuNav;
   private focus = 0;
-  private btns: ReturnType<typeof button>[] = [];
+  private btns: { b: ReturnType<typeof button>; act: () => void }[] = [];
 
   constructor() {
     super('pause');
@@ -16,27 +18,38 @@ export class PauseScene extends Phaser.Scene {
 
   init(d: { data: MatchData }): void {
     this.data_ = d.data;
-    this.focus = 0;
     this.btns = [];
   }
 
   create(): void {
-    this.add.rectangle(GAME_W / 2, GAME_H / 2, GAME_W, GAME_H, COLORS.ink, 0.7).setInteractive();
-    text(this, GAME_W / 2, 140, 'PAUSA', 32, hexColor(COLORS.yellow));
+    const { w, h } = view(this);
+    this.add.rectangle(w / 2, h / 2, w, h, COLORS.ink, 0.72).setInteractive();
+    const k = Math.min(1, h / 540);
+    text(this, w / 2, 70 * k + 20, 'PAUSA', 30, hexColor(COLORS.yellow));
     const actions: [string, () => void][] = [
       ['RIPRENDI', () => this.resume()],
       ['RICOMINCIA', () => this.restart()],
       ['MENU', () => this.toMenu()],
     ];
-    actions.forEach(([l, fn], i) => this.btns.push(button(this, GAME_W / 2, 230 + i * 70, 260, 52, l, fn)));
+    if (fullscreenSupported()) actions.push([isFullscreen() ? 'ESCI SCH. INTERO' : 'SCHERMO INTERO', () => this.fs()]);
+    const step = Math.min(66, (h - 160 * k) / actions.length);
+    actions.forEach(([l, fn], i) => this.btns.push({ b: button(this, w / 2, 150 * k + 20 + i * step, 300, Math.min(52, step - 10), l, fn), act: fn }));
     const input = new InputManager(this);
     input.bindEnter(this);
     this.nav = new MenuNav(input);
+    this.focus = Math.min(this.focus, this.btns.length - 1);
     this.refresh();
+    restartOnResize(this, { data: this.data_ });
   }
 
   private refresh(): void {
-    this.btns.forEach((b, i) => b.setFocus(i === this.focus));
+    this.btns.forEach(({ b }, i) => b.setFocus(i === this.focus));
+  }
+
+  private fs(): void {
+    toggleFullscreen(this);
+    sfx.ui();
+    this.time.delayedCall(300, () => this.btns[3]?.b.label.setText(isFullscreen() ? 'ESCI SCH. INTERO' : 'SCHERMO INTERO'));
   }
 
   private resume(): void {
@@ -65,6 +78,6 @@ export class PauseScene extends Phaser.Scene {
       this.refresh();
     }
     if (ev.back) this.resume();
-    else if (ev.ok) [() => this.resume(), () => this.restart(), () => this.toMenu()][this.focus]();
+    else if (ev.ok) this.btns[this.focus].act();
   }
 }

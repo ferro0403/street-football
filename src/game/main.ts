@@ -7,6 +7,8 @@ import { HudScene } from './scenes/HudScene';
 import { PauseScene } from './scenes/PauseScene';
 import { EndScene } from './scenes/EndScene';
 import { GAME_H, GAME_W } from './ui';
+import { setPadMessageHandler } from './input/InputManager';
+import { toast } from './fullscreen';
 
 async function start() {
   // Il font pixel va caricato prima che Phaser disegni i testi.
@@ -16,6 +18,8 @@ async function start() {
     /* si usa il font di riserva */
   }
 
+  setPadMessageHandler((msg) => toast(msg));
+
   const game = new Phaser.Game({
     type: Phaser.AUTO,
     parent: 'game',
@@ -24,14 +28,20 @@ async function start() {
     backgroundColor: '#0d0b14',
     pixelArt: true,
     scale: {
-      mode: Phaser.Scale.FIT,
+      // EXPAND: riempie tutto lo schermo senza bande nere; l'area 960x540 resta sempre visibile.
+      mode: Phaser.Scale.EXPAND,
       autoCenter: Phaser.Scale.CENTER_BOTH,
     },
-    input: { activePointers: 5 },
+    input: { activePointers: 6 },
     fps: { target: 60 },
     scene: [BootScene, MenuScene, MatchScene, HudScene, PauseScene, EndScene],
   });
   Object.assign(window, { game });
+
+  // Le barre del browser su telefono cambiano l'area visibile senza un vero "resize".
+  const refresh = () => game.scale.refresh();
+  window.visualViewport?.addEventListener('resize', refresh);
+  window.addEventListener('orientationchange', () => setTimeout(refresh, 250));
 }
 
 void start();

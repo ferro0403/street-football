@@ -7,7 +7,7 @@ export const FRAME_W = 40;
 /** Il personaggio è largo 24 px: margine per le pose distese (contrasto, a terra). */
 const PAD_X = 8;
 export const FRAME_H = 36;
-export const FRAMES = ['idle', 'run1', 'run2', 'kick', 'slide', 'cheer', 'down', 'spin'] as const;
+export const FRAMES = ['idle', 'run1', 'run2', 'kick', 'slide', 'cheer', 'down', 'spin', 'rabona', 'tackle'] as const;
 export type FrameName = (typeof FRAMES)[number];
 
 const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
@@ -73,6 +73,8 @@ interface Pose {
   armR: number;
   bodyY: number;
   kickLeg?: boolean;
+  /** Verso della gamba che calcia: 1 avanti/destra, -1 incrociata dietro (rabona). */
+  kickDir?: 1 | -1;
 }
 
 const POSES: Record<Exclude<FrameName, 'down' | 'slide' | 'spin'>, Pose> = {
@@ -81,6 +83,8 @@ const POSES: Record<Exclude<FrameName, 'down' | 'slide' | 'spin'>, Pose> = {
   run2: { legL: [2, 0], legR: [-2, 2], armL: -1, armR: 1, bodyY: -1 },
   kick: { legL: [0, 0], legR: [5, 4], armL: 1, armR: -1, bodyY: 0, kickLeg: true },
   cheer: { legL: [-1, 0], legR: [1, 0], armL: 2, armR: 2, bodyY: -2 },
+  rabona: { legL: [4, 0], legR: [-1, 3], armL: -1, armR: 1, bodyY: 0, kickLeg: true, kickDir: -1 },
+  tackle: { legL: [-2, 0], legR: [7, 1], armL: 1, armR: 1, bodyY: 3, kickLeg: true },
 };
 
 function drawPlayer(
@@ -99,6 +103,13 @@ function drawPlayer(
     const x = bx + dx;
     const top = 24 + by;
     if (kick) {
+      if (pose.kickDir === -1) {
+        // Rabona: la gamba passa dietro quella d'appoggio e calcia di lato.
+        block(p, x, top, 3, 4, look.skin);
+        block(p, x - 5, top + 4 - lift, 6, 3, sock);
+        rect(p, x - 7, top + 4 - lift, 2, 3, boot);
+        return;
+      }
       block(p, x, top, 3, 4, look.skin);
       block(p, x + 1, top + 4 - lift, 5, 3, sock);
       rect(p, x + 5, top + 4 - lift, 2, 3, boot);

@@ -11,6 +11,8 @@ export interface PlayerStats {
   passing: number;
   dribbling: number;
   defense: number;
+  /** Forza fisica: spallate e contrasti. */
+  strength: number;
 }
 
 export interface PlayerLook {
@@ -53,6 +55,10 @@ export type ActionKind =
   | 'none'
   | 'kick'
   | 'tackle'
+  | 'shoulder'
+  | 'slide'
+  | 'fall'
+  | 'stagger'
   | 'feint'
   | 'veronica'
   | 'elastico'
@@ -71,6 +77,12 @@ export interface PlayerAction {
   dy: number;
   /** Per il contrasto: già risolto in questo intervento. */
   done: boolean;
+  /** Dati extra dell'azione (es. perno della veronica, lato dell'elastico). */
+  ax: number;
+  ay: number;
+  side: number;
+  /** Bersaglio dell'azione (es. difensore saltato), -1 = nessuno. */
+  target: number;
 }
 
 export interface AiMemory {
@@ -114,6 +126,13 @@ export interface PlayerState {
   tackleCd: number;
   charge: number;
   chargeKind: 'none' | 'shot' | 'pass';
+  /** Fase del palleggio (0..1): la palla si allontana e torna ai piedi. */
+  dribble: number;
+  /** Distanza attuale palla-piedi quando la conduce (m). */
+  ballOff: number;
+  /** Dopo un controllo perso o un cambio brusco, breve pausa. */
+  touchCd: number;
+  slideCd: number;
   /** ID del controller umano che lo guida, null = CPU. */
   human: string | null;
   ai: AiMemory;
@@ -136,6 +155,16 @@ export interface BallState {
   shotId: number;
   shotTeam: number;
   shotActive: boolean;
+  /** Da dove è partito il tiro (per i tiri dalla distanza). */
+  shotX: number;
+  shotY: number;
+  /** Effetto: accelerazione laterale (m/s²) perpendicolare alla velocità. */
+  spin: number;
+  /** 0 nessuno, 1 rasoterra, 2 lancio, 3 filtrante. */
+  passKind: number;
+  /** Punto dove andrà ricevuto il passaggio. */
+  passTx: number;
+  passTy: number;
   /** Squadra che ha segnato in questa azione (palla dentro la rete), -1 = no. */
   inGoal: number;
 }
@@ -145,7 +174,13 @@ export interface PlayerInput {
   mx: number;
   my: number;
   sprint: boolean;
+  /** Con palla: passaggio rasoterra (tieni = più veloce). Senza: cambio giocatore. */
   pass: boolean;
+  /** Con palla: lancio alto. Senza: scivolata. */
+  lob: boolean;
+  /** Con palla: passaggio filtrante nello spazio. */
+  through: boolean;
+  /** Con palla: tiro (tieni = più forte). Senza: contrasto in piedi. */
   shoot: boolean;
   feint: boolean;
   skill: boolean;
@@ -175,6 +210,10 @@ export type MatchEventType =
   | 'catch'
   | 'dive'
   | 'tackle'
+  | 'slide'
+  | 'foul'
+  | 'steal'
+  | 'heavyTouch'
   | 'tackleMiss'
   | 'dodge'
   | 'feint'
@@ -203,6 +242,7 @@ export interface TeamMatchStats {
   saves: number;
   tackles: number;
   passes: number;
+  fouls: number;
   possessionTicks: number;
 }
 
