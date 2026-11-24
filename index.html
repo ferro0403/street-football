@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#0d0b14" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>Street Cage</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7' fill='%23fff' stroke='%23000'/%3E%3Cpath d='M8 4l3 2-1 4H6L5 6z' fill='%23000'/%3E%3C/svg%3E" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        background: #0d0b14;
+        overflow: hidden;
+        overscroll-behavior: none;
+        touch-action: none;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      #game {
+        position: fixed;
+        inset: 0;
+        /* Rispetta notch e bordi arrotondati in orizzontale. */
+        padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+          env(safe-area-inset-left);
+        box-sizing: border-box;
+      }
+      #rotate {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 10;
+        background: #0d0b14;
+        color: #ffd21f;
+        font-family: 'Press Start 2P', monospace;
+        font-size: 14px;
+        line-height: 1.8;
+        text-align: center;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        padding: 24px;
+        box-sizing: border-box;
+      }
+      #rotate .phone {
+        width: 46px;
+        height: 80px;
+        border: 4px solid #ffd21f;
+        border-radius: 8px;
+        margin-bottom: 28px;
+        animation: turn 1.6s ease-in-out infinite;
+      }
+      @keyframes turn {
+        0%,
+        20% {
+          transform: rotate(0deg);
+        }
+        60%,
+        100% {
+          transform: rotate(-90deg);
+        }
+      }
+      /* Telefono in verticale: invito a ruotarlo. */
+      @media (orientation: portrait) and (pointer: coarse) {
+        #rotate {
+          display: flex;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="game"></div>
+    <div id="rotate">
+      <div class="phone"></div>
+      <div>RUOTA IL TELEFONO</div>
+      <div style="color: #fff; font-size: 10px; margin-top: 12px">Si gioca in orizzontale</div>
+    </div>
+    <script type="module" src="/src/game/main.ts"></script>
+  </body>
+</html>
