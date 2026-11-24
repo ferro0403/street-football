@@ -13,8 +13,8 @@ function script(t: number): InputMap {
       sprint: phase % 2 === 0,
       shoot: t % 97 > 70,
       pass: t % 61 > 50,
-      feint: t % 53 === 0,
-      skill: t % 211 === 0,
+      tackle: t % 53 === 0,
+      slide: t % 211 === 0,
       switch: t % 300 === 0,
     }),
   };

@@ -45,7 +45,6 @@ export class EndScene extends Phaser.Scene {
 
     const total = s.stats[0].possessionTicks + s.stats[1].possessionTicks || 1;
     const rows: [string, number | string, number | string][] = [
-      ['FALLI', s.stats[0].fouls, s.stats[1].fouls],
       ['POSSESSO', `${Math.round((s.stats[0].possessionTicks / total) * 100)}%`, `${Math.round((s.stats[1].possessionTicks / total) * 100)}%`],
       ['TIRI', s.stats[0].shots, s.stats[1].shots],
       ['IN PORTA', s.stats[0].onTarget, s.stats[1].onTarget],

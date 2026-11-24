@@ -3,7 +3,6 @@
 import { CENTER_Y, DT, FIELD, PHYS } from './constants';
 import { len } from './math';
 import { randSigned } from './rng';
-import { DRIBBLE_BASE, dribbleAmpSprint, dribbleAmpWalk, runSpeed } from './stats';
 import type { MatchState } from './types';
 
 const R = PHYS.ballRadius;
@@ -69,19 +68,6 @@ export function stepBall(s: MatchState): number {
     b.vy *= k;
   }
 
-  // Effetto: accelerazione laterale perpendicolare alla velocità orizzontale.
-  if (b.spin !== 0) {
-    const sp = len(b.vx, b.vy);
-    if (sp > 1) {
-      const ax = (-b.vy / sp) * b.spin;
-      const ay = (b.vx / sp) * b.spin;
-      b.vx += ax * DT;
-      b.vy += ay * DT;
-    }
-    b.spin *= 1 - 0.6 * DT;
-    if (Math.abs(b.spin) < 0.05) b.spin = 0;
-  }
-
   const airborne = b.z > 0.001 || b.vz > 0;
   if (airborne) {
     b.vz -= PHYS.gravity * DT;
@@ -109,7 +95,6 @@ export function stepBall(s: MatchState): number {
       b.vz = impact * PHYS.groundRestitution;
       b.vx *= 0.9;
       b.vy *= 0.9;
-      b.spin *= 0.5;
       if (impact > 3) ev.push({ type: 'bounce', power: impact, x: b.x, y: b.y });
     } else {
       b.vz = 0;
@@ -127,14 +112,12 @@ export function stepBall(s: MatchState): number {
     if (b.vy < 0) {
       wallHit(s, Math.abs(b.vy));
       b.vy = -b.vy * PHYS.wallRestitution;
-      b.spin = 0;
     }
   } else if (b.y > FIELD.width - R) {
     b.y = FIELD.width - R;
     if (b.vy > 0) {
       wallHit(s, Math.abs(b.vy));
       b.vy = -b.vy * PHYS.wallRestitution;
-      b.spin = 0;
     }
   }
 
@@ -163,7 +146,6 @@ function insideGoal(s: MatchState, prevX: number): number {
     const nearPost = dy < HALF_GOAL + R && b.z < FIELD.goalHeight + R;
     b.x = left ? R : FIELD.length - R;
     const speed = Math.abs(b.vx);
-    b.spin = 0;
     if (nearPost) {
       b.vx = -b.vx * PHYS.postRestitution;
       b.vy += randSigned(s) * 2.5;
@@ -182,7 +164,6 @@ function insideGoal(s: MatchState, prevX: number): number {
 
 function clampInNet(s: MatchState, left: boolean): void {
   const b = s.ball;
-  b.spin = 0;
   const back = left ? -FIELD.goalDepth + R : FIELD.length + FIELD.goalDepth - R;
   if (left ? b.x < back : b.x > back) {
     b.x = back;
@@ -205,40 +186,25 @@ function clampInNet(s: MatchState, left: boolean): void {
 }
 
 /**
- * Palla condotta: resta ai piedi a corsa normale, si allunga in scatto (tocchi più lunghi,
- * di più per chi dribbla male). Le skill la spostano lateralmente (elastico).
+ * Palla condotta: incollata ai piedi, con un piccolo tocco ritmico; in scatto sta appena più
+ * avanti. Nessun modo di "perderla" da sola: si perde solo con un contrasto.
  */
 export function attachBall(s: MatchState, sprinting: boolean): void {
   const b = s.ball;
   const p = s.players[b.owner];
   const sp = len(p.vx, p.vy);
-  const run = runSpeed(p.stats);
-  // Il ciclo del tocco avanza con la strada percorsa.
-  const touchLen = sprinting ? 2.4 : 1.5;
+  const touchLen = sprinting ? 2.2 : 1.5;
   p.dribble = (p.dribble + (sp * DT) / touchLen) % 1;
   const ph = p.dribble;
   const tri = ph < 0.5 ? ph * 2 : 2 - ph * 2;
-  const moving = Math.min(1, sp / (run * 0.6));
-  const amp = sprinting ? dribbleAmpSprint(p.stats) : dribbleAmpWalk(p.stats);
-  let off = DRIBBLE_BASE + amp * tri * moving;
-  let lat = 0;
-  if (p.action.kind === 'elastico') {
-    // Elastico: la palla va fuori col piede e poi rientra dall'altra parte.
-    const t = p.action.t / p.action.dur;
-    lat = p.action.side * (t < 0.4 ? -t / 0.4 : -1 + (t - 0.4) * 3.3) * 0.45;
-    off = 0.38;
-  } else if (p.action.kind === 'veronica') {
-    off = 0.35;
-  }
-  // Il punto di guida segue lo sguardo, che con la palla gira più lentamente.
-  p.ballOff = off;
-  b.x = p.x + p.fx * off - p.fy * lat;
-  b.y = p.y + p.fy * off + p.fx * lat;
+  const moving = Math.min(1, sp / 3);
+  const off = (sprinting ? 0.5 : 0.42) + (sprinting ? 0.14 : 0.06) * tri * moving;
+  b.x = p.x + p.fx * off;
+  b.y = p.y + p.fy * off;
   b.z = 0;
   b.vx = p.vx;
   b.vy = p.vy;
   b.vz = 0;
-  b.spin = 0;
   if (b.x < R) b.x = R;
   if (b.x > FIELD.length - R) b.x = FIELD.length - R;
   if (b.y < R) b.y = R;

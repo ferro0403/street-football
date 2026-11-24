@@ -4,7 +4,7 @@ import Phaser from 'phaser';
 import { createMatch, stepMatch } from '../../shared/match';
 import { DT, FIELD } from '../../shared/constants';
 import { teamById } from '../../shared/teams';
-import { pickPassTarget, shotAimFromInput, shotTarget } from '../../shared/actions';
+import { passTargetInDir, shotAim, shotTarget } from '../../shared/actions';
 import { attackDir } from '../../shared/world';
 import type { MatchEvent, MatchState, PlayerInput, PlayerState } from '../../shared/types';
 import { isoDepth, isoX, isoY, screenToWorldDir, worldToScreenDir } from '../iso';
@@ -13,6 +13,7 @@ import { PlayerSprite, dir8 } from '../render/playerSprite';
 import { InputManager, isTouchDevice } from '../input/InputManager';
 import { sfx, unlockAudio } from '../fx/sfx';
 import { view } from '../ui';
+import { DebugPanel, loadTune } from '../debugPanel';
 
 export interface MatchData {
   home: string;
@@ -90,6 +91,8 @@ export class MatchScene extends Phaser.Scene {
   private dust!: Phaser.GameObjects.Particles.ParticleEmitter;
   private confetti!: Phaser.GameObjects.Particles.ParticleEmitter;
   private lastBallSpeed = 0;
+  private debug: DebugPanel | null = null;
+  private debugPrev = false;
 
   constructor() {
     super('match');
@@ -121,7 +124,9 @@ export class MatchScene extends Phaser.Scene {
       durationSec: this.data_.duration,
       seed: (Date.now() & 0x7fffffff) ^ 0x2f6b,
       humans: [{ id: LOCAL_ID, team: 0 }],
+      tune: loadTune(),
     });
+    this.debug = new DebugPanel(() => this.state);
     this.input_ = new InputManager(this);
 
     drawField(this);
@@ -182,7 +187,10 @@ export class MatchScene extends Phaser.Scene {
     if (this.scene.isActive('hud')) this.scene.stop('hud');
     this.scene.launch('hud');
     this.scene.bringToTop('hud');
-    this.events.once('shutdown', () => this.input.off('pointerdown', unlockAudio));
+    this.events.once('shutdown', () => {
+      this.input.off('pointerdown', unlockAudio);
+      this.debug?.close();
+    });
   }
 
   /** Zoom in base all'altezza dello schermo: su telefono la camera è più vicina. */
@@ -201,6 +209,9 @@ export class MatchScene extends Phaser.Scene {
       return;
     }
     this.pausePrev = si.pause;
+    if (si.debug && !this.debugPrev) this.debug?.toggle();
+    this.debugPrev = si.debug;
+    if (this.debug?.open) this.debug.refresh();
 
     const [mx, my] = screenToWorldDir(si.sx, si.sy);
     const inp: PlayerInput = {
@@ -208,11 +219,9 @@ export class MatchScene extends Phaser.Scene {
       my,
       sprint: si.sprint,
       pass: si.pass,
-      lob: si.lob,
-      through: si.through,
       shoot: si.shoot,
-      feint: si.feint,
-      skill: si.skill,
+      tackle: si.tackle,
+      slide: si.slide,
       switch: si.switch,
     };
     this.lastInput = inp;
@@ -323,18 +332,11 @@ export class MatchScene extends Phaser.Scene {
         sfx.whoosh();
         break;
       case 'tackle':
-      case 'steal':
         sfx.tackle();
-        this.addTrauma(e.skill === 'slide' || e.skill === 'shoulder' ? 0.22 : 0.12);
-        this.puff(e.x, e.y, 10);
-        break;
-      case 'foul':
-        sfx.tackle();
-        this.addTrauma(0.2);
+        this.addTrauma(e.skill === 'slide' ? 0.22 : 0.12);
         this.puff(e.x, e.y, 10);
         break;
       case 'tackleMiss':
-      case 'heavyTouch':
         this.puff(e.x, e.y, 4);
         break;
       case 'save':
@@ -347,16 +349,6 @@ export class MatchScene extends Phaser.Scene {
         if (e.p !== undefined) this.views[e.p].catchT = this.time.now;
         break;
       case 'dive':
-        sfx.whoosh();
-        break;
-      case 'special':
-        // Skill: nome grande (HUD), rallentatore breve, zoom e scia.
-        sfx.whoosh();
-        this.slowMo(0.3, 480);
-        this.zoomPunch = 0.35;
-        break;
-      case 'feint':
-      case 'dodge':
         sfx.whoosh();
         break;
       case 'whistle':
@@ -471,23 +463,23 @@ export class MatchScene extends Phaser.Scene {
     const hasDir = Math.hypot(mx, my) > 0.2;
 
     // Compagno che riceverebbe il passaggio adesso.
-    if (p.chargeKind !== 'shot') {
-      const t = pickPassTarget(s, p, hasDir ? mx : p.fx, hasDir ? my : p.fy);
+    if (!p.charging) {
+      const t = passTargetInDir(s, p, hasDir ? mx : p.fx, hasDir ? my : p.fy);
       if (t >= 0) {
         const tv = this.views[t];
-        this.targetRing.setVisible(true).setPosition(tv.ps.container.x, tv.ps.container.y).setAlpha(p.chargeKind === 'pass' ? 1 : 0.55);
+        this.targetRing.setVisible(true).setPosition(tv.ps.container.x, tv.ps.container.y).setAlpha(0.8);
       }
     }
 
-    if (p.chargeKind === 'none') return;
+    if (!p.charging) return;
     const w = 28;
-    const col = p.chargeKind === 'pass' ? 0x2ec4b6 : p.charge > 0.8 ? 0xff4d6d : p.charge > 0.45 ? 0xffd21f : 0x7cff6b;
+    const col = p.charge > 0.8 ? 0xff4d6d : p.charge > 0.45 ? 0xffd21f : 0x7cff6b;
     o.fillStyle(0x0d0b14, 0.85).fillRect(x - w / 2 - 1, y - FIG_H - 24, w + 2, 6);
     o.fillStyle(col, 1).fillRect(x - w / 2, y - FIG_H - 23, w * p.charge, 4);
 
-    if (p.chargeKind === 'shot') {
+    {
       // Mirino sulla porta e traiettoria tratteggiata: dove andrà il tiro.
-      const aim = shotAimFromInput(mx, my);
+      const aim = shotAim(my);
       const [gx, gy] = shotTarget(p, aim);
       const h = 0.25 + p.charge * p.charge * 0.95;
       const tx = isoX(gx, gy);
