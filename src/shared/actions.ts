@@ -110,7 +110,7 @@ export function shoot(s: MatchState, p: PlayerState, power: number, aim: number,
   s.stats[p.team].shots += 1;
   p.fx = dx;
   p.fy = dy;
-  setAction(p, 'kick', 0.3, dx, dy);
+  setAction(p, 'shoot', 0.32, dx, dy);
   s.events.push({ type: 'shot', p: p.idx, team: p.team, power: vh, x: b.x, y: b.y });
 }
 

@@ -15,10 +15,16 @@ export interface PlayerStats {
   strength: number;
 }
 
+/** Tagli di capelli disponibili negli sprite (scripts/sprites/rig.ts). */
+export type HairStyle = 'bald' | 'buzz' | 'short' | 'curly' | 'mohawk' | 'long';
+
+/** Aspetto personalizzabile: base per avatar e campioni. Colori 0xRRGGBB. */
 export interface PlayerLook {
-  skin: number; // colore 0xRRGGBB
+  skin: number;
   hair: number;
-  hairStyle: 0 | 1 | 2 | 3; // rasato, corto, ricci, cresta
+  hairStyle: HairStyle;
+  /** Colore delle scarpe (personale, non della squadra). */
+  boots: number;
 }
 
 export interface PlayerDef {
@@ -54,6 +60,7 @@ export interface TeamDef {
 export type ActionKind =
   | 'none'
   | 'kick'
+  | 'shoot'
   | 'tackle'
   | 'shoulder'
   | 'slide'

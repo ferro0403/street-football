@@ -6,7 +6,7 @@ import { overall, SKILL_LABELS } from '../../shared/stats';
 import { COLORS, button, hexColor, restartOnResize, safeInsets, text, view } from '../ui';
 import { InputManager, isTouchDevice } from '../input/InputManager';
 import { MenuNav } from '../input/MenuNav';
-import { makePlayerTexture } from '../render/textures';
+import { PlayerSprite } from '../render/playerSprite';
 import { sfx, unlockAudio } from '../fx/sfx';
 import { fullscreenSupported, isFullscreen, isIOS, isStandalone, toggleFullscreen } from '../fullscreen';
 
@@ -28,7 +28,7 @@ export class MenuScene extends Phaser.Scene {
   private rows: Row[] = [];
   private btns: { b: Btn; act: () => void }[] = [];
   private nav!: MenuNav;
-  private previews: Phaser.GameObjects.Image[] = [];
+  private previews: PlayerSprite[] = [];
   private overlay!: Phaser.GameObjects.Container;
 
   constructor() {
@@ -79,11 +79,12 @@ export class MenuScene extends Phaser.Scene {
 
     // Pulsanti: GIOCA grande, poi COMANDI e SCHERMO INTERO.
     const by = Math.min(h - ins.b - 40, y0 + gap * 2 + 80 * k + 20);
-    const bw = Math.min(220, (w - ins.l - ins.r - 60) / 3);
+    const bw = Math.min(200, (w - ins.l - ins.r - 60) / 4);
     const showFs = isFullscreen() || (!isStandalone() && (fullscreenSupported() || isIOS()));
     const items: [string, () => void][] = [
       ['GIOCA', () => this.play()],
       ['COMANDI', () => this.showHelp()],
+      ['GIOCATORI', () => this.scene.start('gallery', { team: this.home })],
     ];
     if (showFs) items.push([isFullscreen() ? 'ESCI SCH. INTERO' : 'SCHERMO INTERO', () => this.fullscreen()]);
     const total = items.length * bw + (items.length - 1) * 16;
@@ -107,7 +108,7 @@ export class MenuScene extends Phaser.Scene {
   }
 
   private relabel(): void {
-    const fs = this.btns[2];
+    const fs = this.btns[3];
     if (fs) fs.b.label.setText(isFullscreen() ? 'ESCI SCH. INTERO' : 'SCHERMO INTERO');
   }
 
@@ -164,10 +165,10 @@ export class MenuScene extends Phaser.Scene {
       [this.home, this.away].forEach((ti, k) => {
         const t = TEAMS[ti];
         const star = t.players[4];
-        const key = `menu-${t.id}`;
-        makePlayerTexture(this, key, t.kit, star.look, star.number);
-        const x = k === 0 ? 70 : w - 70;
-        this.previews.push(this.add.image(x, this.rows[1].bg.y, key, k === 0 ? 'cheer' : 'idle').setScale(3).setFlipX(k === 1));
+        const ps = new PlayerSprite(this, { look: star.look, kit: t.kit, number: star.number, gk: false });
+        ps.scaleK = 2;
+        ps.setPosition(k === 0 ? 80 : w - 80, this.rows[2].bg.y + 40);
+        this.previews.push(ps);
       });
     }
     try {
@@ -259,7 +260,13 @@ export class MenuScene extends Phaser.Scene {
     this.scene.start('match', { home: TEAMS[this.home].id, away: TEAMS[this.away].id, duration: DURATIONS[this.dur] });
   }
 
-  update(_t: number, dt: number): void {
+  update(t: number, dt: number): void {
+    // Anteprime animate: il tuo campione esulta, l'avversario gira su se stesso correndo.
+    if (this.previews.length === 2) {
+      const [a, b] = this.previews;
+      a.show('celebrate', Math.floor(t / 125) % 6, 0);
+      b.show('run', Math.floor(t / 80) % 8, Math.floor(t / 900) % 8);
+    }
     const ev = this.nav.update(dt);
     if (this.overlay.visible) {
       if (ev.ok || ev.back) this.hidePanel();

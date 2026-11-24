@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "art_direction_brief": "docs/art/art-direction.md",
+  "assets": [
+    {
+      "id": "players-atlas",
+      "role": "giocatori e portieri: livelli in scala di grigi da tingere, 8 direzioni",
+      "path": "public/assets/sprites/players-0.png + players.json + players-meta.json",
+      "status": "approved-for-prototype",
+      "technical": { "dimensions": "frame 88x92, atlas 2048x<=2048", "alpha": true, "anchor": "44,78 (piedi)", "frames": "740 pose x 9-14 livelli", "filtering": "nearest" },
+      "visual_locks": ["palette (4 fasce + contorno)", "proporzioni", "luce dall'alto a sinistra", "vista isometrica 2:1"],
+      "source": {
+        "kind": "procedural (authored code)",
+        "url_or_tool": "scripts/sprites/generate.ts",
+        "creator": "progetto Street Cage",
+        "created_at": "2026-11-24",
+        "license": "stessa licenza del progetto (nessun contenuto di terzi)",
+        "attribution": "",
+        "prompt_or_source_record": "generato deterministicamente da rig.ts/anims.ts/render.ts; nessuna IA generativa di immagini"
+      },
+      "verification": { "native_scale_reviewed": true, "in_engine_reviewed": true, "technical_checks_passed": true, "approved_by": "" }
+    },
+    {
+      "id": "ball-roll",
+      "role": "palla che rotola, 16 fotogrammi",
+      "path": "public/assets/sprites/ball.png",
+      "status": "approved-for-prototype",
+      "technical": { "dimensions": "16x16 x16", "alpha": true, "anchor": "centro", "frames": 16, "filtering": "nearest" },
+      "visual_locks": ["pezze di un icosaedro", "luce dall'alto a sinistra"],
+      "source": { "kind": "procedural (authored code)", "url_or_tool": "scripts/sprites/generate.ts", "creator": "progetto Street Cage", "created_at": "2026-11-24", "license": "stessa licenza del progetto", "attribution": "", "prompt_or_source_record": "" },
+      "verification": { "native_scale_reviewed": true, "in_engine_reviewed": true, "technical_checks_passed": true, "approved_by": "" }
+    },
+    {
+      "id": "shadow",
+      "role": "ombra ellittica retinata sotto giocatori e palla",
+      "path": "public/assets/sprites/shadow.png",
+      "status": "approved-for-prototype",
+      "technical": { "dimensions": "40x16", "alpha": true, "anchor": "centro", "frames": 1, "filtering": "nearest" },
+      "visual_locks": [],
+      "source": { "kind": "procedural (authored code)", "url_or_tool": "scripts/sprites/generate.ts", "creator": "progetto Street Cage", "created_at": "2026-11-24", "license": "stessa licenza del progetto", "attribution": "", "prompt_or_source_record": "" },
+      "verification": { "native_scale_reviewed": true, "in_engine_reviewed": true, "technical_checks_passed": true, "approved_by": "" }
+    }
+  ]
+}
