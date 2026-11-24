@@ -224,6 +224,98 @@ export const FIELD_ANIMS: Record<string, AnimDef> = {
       pose({ lean: 0.15, roll: 0.08, hipL: [0.3, 0.15], kneeL: 0.4, hipR: [-0.2, 0.05], kneeR: 0.5 }),
     ),
   },
+  // --- Nuove azioni del gameplay street ----------------------------------------------
+  header: {
+    frames: 4,
+    loop: false,
+    fps: 12,
+    at: keys(
+      pose({ bob: -0.12, lean: -0.1, hipL: [0.3, 0.12], hipR: [0.3, 0.12], kneeL: 0.8, kneeR: 0.8, shL: [0.6, 0.5], shR: [0.6, 0.5], head: [-0.5, 0] }),
+      pose({ lift: 0.32, lean: -0.15, hipL: [0.1, 0.1], hipR: [-0.2, 0.1], kneeL: 0.5, kneeR: 0.9, shL: [0.4, 1.2], shR: [0.4, 1.2], head: [-0.6, 0] }),
+      pose({ lift: 0.36, lean: 0.35, hipL: [0.15, 0.1], hipR: [-0.3, 0.1], kneeL: 0.4, kneeR: 1.0, shL: [-0.3, 1.0], shR: [-0.3, 1.0], head: [0.5, 0] }),
+      pose({ lift: 0.1, lean: 0.2, hipL: [0.3, 0.1], hipR: [0.1, 0.1], kneeL: 0.6, kneeR: 0.5, shL: [0.0, 0.6], shR: [0.0, 0.6] }),
+    ),
+  },
+  volley: {
+    frames: 5,
+    loop: false,
+    fps: 14,
+    at: keys(
+      pose({ lean: -0.1, side: 0.2, hipR: [-0.6, 0.5], kneeR: 1.3, kneeL: 0.3, shL: [0.3, 1.1], shR: [-0.3, 0.9] }),
+      pose({ lean: -0.15, side: 0.35, roll: 0.25, hipR: [0.4, 0.9], kneeR: 0.6, kneeL: 0.35, shL: [0.2, 1.3], shR: [-0.2, 1.0] }),
+      pose({ lean: -0.1, side: 0.4, roll: 0.35, lift: 0.05, hipR: [1.0, 1.0], kneeR: 0.1, kneeL: 0.3, shL: [0.0, 1.3], shR: [0.2, 1.0], twist: 0.3 }),
+      pose({ lean: 0.05, side: 0.25, roll: 0.2, hipR: [1.2, 0.6], kneeR: 0.3, kneeL: 0.25, shL: [-0.2, 0.9], shR: [0.4, 0.8], twist: 0.35 }),
+      pose({ lean: 0.1, hipR: [0.3, 0.1], kneeR: 0.4, kneeL: 0.2 }),
+    ),
+  },
+  bicycle: {
+    frames: 6,
+    loop: false,
+    fps: 10,
+    at: keys(
+      pose({ bob: -0.12, lean: -0.2, hipL: [0.3, 0.1], hipR: [0.3, 0.1], kneeL: 0.8, kneeR: 0.8, shL: [0.5, 0.8], shR: [0.5, 0.8], head: [-0.4, 0] }),
+      pose({ pitch: -0.9, lift: 0.3, hipL: [1.2, 0.1], kneeL: 1.0, hipR: [0.4, 0.1], kneeR: 0.6, shL: [-0.5, 1.2], shR: [-0.5, 1.2], head: [0.3, 0] }),
+      pose({ pitch: -1.6, lift: 0.25, hipL: [0.3, 0.1], kneeL: 1.2, hipR: [1.7, 0.0], kneeR: 0.05, shL: [-0.8, 1.4], shR: [-0.8, 1.4], head: [0.5, 0] }),
+      pose({ pitch: -1.75, lift: 0.0, hipL: [0.6, 0.1], kneeL: 0.9, hipR: [1.3, 0.0], kneeR: 0.3, shL: [-1.2, 1.0], shR: [-1.2, 1.0], head: [0.6, 0] }),
+      pose({ pitch: -1.5, lift: -0.55, hipL: [0.7, 0.1], kneeL: 0.8, hipR: [0.9, 0.1], kneeR: 0.6, shL: [-1.5, 0.6], shR: [-1.5, 0.6], elL: 0.2, elR: 0.2, head: [0.6, 0] }),
+      pose({ pitch: -1.5, lift: -0.7, hipL: [0.8, 0.1], kneeL: 1.2, hipR: [0.6, 0.1], kneeR: 1.0, shL: [-1.4, 0.5], shR: [-1.4, 0.5], elL: 0.4, elR: 0.4, head: [0.7, 0] }),
+    ),
+  },
+  shield: {
+    frames: 4,
+    loop: true,
+    fps: 6,
+    // Protezione: busto indietro verso il difensore, braccia larghe, gambe piegate.
+    at: (i, n) => {
+      const b = Math.sin((i / n) * TAU);
+      return pose({ bob: -0.12, lean: -0.15, hipL: [0.25, 0.25], hipR: [-0.1, 0.2], kneeL: 0.7, kneeR: 0.55, shL: [-0.5 + 0.1 * b, 1.1], shR: [-0.4 - 0.1 * b, 1.0], elL: 0.5, elR: 0.6, head: [0.1, 0.4] });
+    },
+  },
+  jockey: {
+    frames: 4,
+    loop: true,
+    fps: 8,
+    // Contenimento: basso, di lato, braccia aperte, passetti.
+    at: (i, n) => {
+      const b = Math.sin((i / n) * TAU);
+      return pose({ bob: -0.14, lean: 0.3, twist: 0.25, hipL: [0.3 + 0.12 * b, 0.32], hipR: [0.3 - 0.12 * b, 0.32], kneeL: 0.85, kneeR: 0.85, footL: 0.3, footR: 0.3, shL: [0.5, 0.75], shR: [0.5, 0.75], elL: 0.5, elR: 0.5, head: [-0.2, 0] });
+    },
+  },
+  juggle: {
+    frames: 4,
+    loop: true,
+    fps: 7,
+    at: keys(
+      pose({ hipR: [0.2, 0.05], kneeR: 0.4, kneeL: 0.15, lean: 0.12, shL: [0.3, 0.6], shR: [0.2, 0.6], head: [0.35, 0] }),
+      pose({ hipR: [0.75, 0.05], kneeR: 0.9, footR: 0.4, kneeL: 0.2, lean: 0.08, shL: [0.4, 0.7], shR: [0.1, 0.7], head: [0.2, 0] }),
+      pose({ hipL: [0.75, 0.05], kneeL: 0.9, footL: 0.4, kneeR: 0.2, lean: 0.08, shL: [0.1, 0.7], shR: [0.4, 0.7], head: [0.2, 0] }),
+      pose({ hipL: [0.2, 0.05], kneeL: 0.4, kneeR: 0.15, lean: 0.12, shL: [0.2, 0.6], shR: [0.3, 0.6], head: [0.35, 0] }),
+    ),
+  },
+  dragback: {
+    frames: 4,
+    loop: false,
+    fps: 12,
+    at: keys(
+      pose({ lean: 0.1, hipR: [0.45, 0.05], kneeR: 0.3, kneeL: 0.3, shL: [0.3, 0.7], shR: [0.2, 0.6] }),
+      pose({ lean: -0.05, hipR: [-0.2, 0.05], kneeR: 0.6, footR: 0.4, kneeL: 0.35, shL: [0.4, 0.9], shR: [0.0, 0.7] }),
+      pose({ lean: 0.05, twist: 0.6, hipR: [-0.35, 0.2], kneeR: 0.7, kneeL: 0.4, shL: [0.2, 0.9], shR: [-0.2, 0.8] }),
+      pose({ lean: 0.18, twist: 0.3, hipL: [0.4, 0.1], kneeL: 0.6, hipR: [-0.3, 0.05], kneeR: 0.5 }),
+    ),
+  },
+  stepover: {
+    frames: 5,
+    loop: false,
+    fps: 14,
+    // Doppio passo: la gamba gira sopra la palla, poi spinta laterale.
+    at: keys(
+      pose({ lean: 0.15, bob: -0.04, hipL: [0.1, 0.12], kneeL: 0.4, hipR: [0.3, 0.05], kneeR: 0.5 }),
+      pose({ lean: 0.18, roll: -0.1, bob: -0.05, hipL: [0.1, 0.12], kneeL: 0.45, hipR: [0.55, -0.45], kneeR: 0.9, shL: [0.2, 0.9], shR: [0.1, 0.5] }),
+      pose({ lean: 0.18, roll: 0.08, bob: -0.05, hipL: [0.1, 0.12], kneeL: 0.45, hipR: [0.35, 0.5], kneeR: 0.5, shL: [0.1, 0.5], shR: [0.2, 0.9] }),
+      pose({ lean: 0.25, roll: 0.2, side: 0.15, bob: -0.04, hipL: [-0.2, 0.05], kneeL: 0.6, hipR: [0.35, 0.35], kneeR: 0.5, shL: [0.4, 0.9], shR: [0.0, 0.7] }),
+      pose({ lean: 0.22, roll: 0.1, hipL: [-0.1, 0.1], kneeL: 0.5, hipR: [0.3, 0.15], kneeR: 0.4 }),
+    ),
+  },
 };
 
 // --- Portiere (guanti, maniche lunghe) -------------------------------------------------------

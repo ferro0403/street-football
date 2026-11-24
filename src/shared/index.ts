@@ -5,3 +5,6 @@ export * from './stats';
 export * from './teams';
 export { createMatch, stepMatch, addController, cloneState, hashState, NEUTRAL_INPUT } from './match';
 export type { MatchConfig } from './match';
+export { trainingReset } from './match';
+export type { TrainingConfig } from './match';
+export * from './tune';

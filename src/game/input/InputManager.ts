@@ -7,30 +7,44 @@ export { PAD, radialDeadzone, setPadMessageHandler } from './gamepad';
 export interface ScreenInput {
   sx: number;
   sy: number;
+  /** Trick stick (sullo schermo). trick = tasto trucco della tastiera tenuto premuto. */
+  tsx: number;
+  tsy: number;
+  trick: boolean;
   sprint: boolean;
   pass: boolean;
   lob: boolean;
   through: boolean;
   shoot: boolean;
-  feint: boolean;
+  mod: boolean;
+  shield: boolean;
   skill: boolean;
+  gb: boolean;
   switch: boolean;
   pause: boolean;
+  reset: boolean;
+  debug: boolean;
 }
 
-export type TouchKey = 'pass' | 'lob' | 'through' | 'shoot' | 'sprint' | 'skill' | 'feint';
+export type TouchKey = 'pass' | 'lob' | 'through' | 'shoot' | 'sprint' | 'skill' | 'shield' | 'gb';
 
 /** Stato scritto dai comandi touch (HudScene, a eventi: nessun ritardo) e letto qui. */
 export const touchState = {
   sx: 0,
   sy: 0,
+  /** Swipe del trick stick: direzione per qualche fotogramma, poi torna a zero. */
+  tsx: 0,
+  tsy: 0,
+  tmod: false,
+  tframes: 0,
   pass: false,
   lob: false,
   through: false,
   shoot: false,
   sprint: false,
   skill: false,
-  feint: false,
+  shield: false,
+  gb: false,
   pause: false,
 };
 /** Tocchi rapidissimi (giù e su prima del fotogramma successivo): non vanno persi. */
@@ -61,22 +75,27 @@ export class InputManager {
         // Mano destra: U I O sopra, J K L sotto.
         pass: K.J,
         shoot: K.K,
-        feint: K.L,
+        trick: K.L,
         lob: K.U,
         skill: K.I,
         through: K.O,
         sprint: K.SHIFT,
-        sprint2: K.SPACE,
+        mod: K.SPACE,
+        shield: K.E,
+        gb: K.G,
         switch: K.Q,
         pause: K.ESC,
         pause2: K.P,
-        // Alternativa per chi muove con le frecce: Z X C V B N.
+        reset: K.R,
+        debug: K.F2,
+        // Alternativa per chi muove con le frecce: Z X C V B N M.
         pass2: K.Z,
         shoot2: K.X,
         lob2: K.C,
         through2: K.V,
-        feint2: K.B,
+        trick2: K.B,
         skill2: K.N,
+        shield2: K.M,
       };
       for (const [name, code] of Object.entries(map)) {
         const key = kb.addKey(code, true, false);
@@ -105,15 +124,22 @@ export class InputManager {
     const out: ScreenInput = {
       sx,
       sy,
-      sprint: this.down('sprint', 'sprint2'),
+      tsx: 0,
+      tsy: 0,
+      trick: this.down('trick', 'trick2'),
+      sprint: this.down('sprint'),
       pass: this.down('pass', 'pass2'),
       lob: this.down('lob', 'lob2'),
       through: this.down('through', 'through2'),
       shoot: this.down('shoot', 'shoot2'),
-      feint: this.down('feint', 'feint2'),
+      mod: this.down('mod'),
+      shield: this.down('shield', 'shield2'),
       skill: this.down('skill', 'skill2'),
+      gb: this.down('gb'),
       switch: this.down('switch'),
       pause: this.down('pause', 'pause2'),
+      reset: this.down('reset'),
+      debug: this.down('debug'),
     };
 
     // Controller (solo quello attivo, calibrato).
@@ -140,14 +166,21 @@ export class InputManager {
         out.sy = py;
         this.lastDevice = 'gamepad';
       }
+      // Levetta destra = trick stick (assi 2 e 3, calibrati come la sinistra).
+      const [rx, ry] = radialDeadzone(ax(2), ax(3), 0.3);
+      if (rx !== 0 || ry !== 0) {
+        out.tsx = rx;
+        out.tsy = ry;
+      }
       out.pass ||= b(PAD.A);
       out.shoot ||= b(PAD.B);
       out.lob ||= b(PAD.X);
       out.through ||= b(PAD.Y);
-      out.switch ||= b(PAD.LB);
-      out.skill ||= b(PAD.RB);
-      out.feint ||= b(PAD.LT);
-      out.sprint ||= b(PAD.RT) || b(PAD.L3);
+      out.skill ||= b(PAD.LB);
+      out.mod ||= b(PAD.RB);
+      out.shield ||= b(PAD.LT);
+      out.sprint ||= b(PAD.RT);
+      out.gb ||= b(PAD.SELECT) || b(PAD.L3);
       out.pause ||= b(PAD.START);
       if (out.pass || out.shoot || out.lob || out.through) this.lastDevice = 'gamepad';
     }
@@ -163,9 +196,17 @@ export class InputManager {
     out.lob ||= t.lob || touchLatch.has('lob');
     out.through ||= t.through || touchLatch.has('through');
     out.shoot ||= t.shoot || touchLatch.has('shoot');
-    out.feint ||= t.feint || touchLatch.has('feint');
+    out.shield ||= t.shield || touchLatch.has('shield');
     out.skill ||= t.skill || touchLatch.has('skill');
+    out.gb ||= t.gb || touchLatch.has('gb');
     out.pause ||= t.pause;
+    if (t.tframes > 0) {
+      // Swipe: il trucco dura qualche fotogramma (fronte di salita per la simulazione).
+      out.tsx = t.tsx;
+      out.tsy = t.tsy;
+      out.mod ||= t.tmod;
+      t.tframes--;
+    }
     touchLatch.clear();
     this.latched.clear();
     return out;

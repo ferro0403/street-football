@@ -24,7 +24,7 @@ interface TouchButton {
   down: boolean;
 }
 
-type Grab = { kind: 'stick' } | { kind: 'btn'; key: TouchKey } | { kind: 'none' };
+type Grab = { kind: 'stick' } | { kind: 'btn'; key: TouchKey } | { kind: 'swipe'; x: number; y: number } | { kind: 'none' };
 
 const BUTTONS: Omit<TouchButton, 'x' | 'y' | 'g' | 't' | 'down'>[] = [
   { key: 'shoot', dx: -78, dy: -165, r: 60, label: 'TIRA', alt: 'CONTRASTO', color: 0xff4d6d },
@@ -33,7 +33,8 @@ const BUTTONS: Omit<TouchButton, 'x' | 'y' | 'g' | 't' | 'down'>[] = [
   { key: 'lob', dx: -285, dy: -52, r: 42, label: 'LANCIO', alt: 'SCIVOLATA', color: 0x4d9dff },
   { key: 'through', dx: -272, dy: -152, r: 40, label: 'FILTRANTE', alt: '', color: 0x00d0ff },
   { key: 'skill', dx: -184, dy: -220, r: 40, label: 'SKILL', alt: '', color: 0xffd21f },
-  { key: 'feint', dx: -64, dy: -278, r: 36, label: 'FINTA', alt: '', color: 0xb47cff },
+  { key: 'shield', dx: -64, dy: -278, r: 38, label: 'PROTEGGI', alt: 'CONTIENI', color: 0xb47cff },
+  { key: 'gb', dx: -300, dy: -250, r: 42, label: 'GB!', alt: 'GB!', color: 0xff7b1f },
 ];
 
 export class HudScene extends Phaser.Scene {
@@ -63,6 +64,13 @@ export class HudScene extends Phaser.Scene {
   private grabs = new Map<number, Grab>();
   private buttons: TouchButton[] = [];
   private hasBallLabels = true;
+  private gbG!: Phaser.GameObjects.Graphics;
+  private vignette!: Phaser.GameObjects.Graphics;
+  private gbText!: Phaser.GameObjects.Text;
+  private comboText!: Phaser.GameObjects.Text;
+  private hintText!: Phaser.GameObjects.Text;
+  private hintT = 0;
+  private trainText!: Phaser.GameObjects.Text;
 
   constructor() {
     super('hud');
@@ -88,6 +96,14 @@ export class HudScene extends Phaser.Scene {
     this.banner = text(this, 0, 0, '', 40, hexColor(COLORS.yellow)).setVisible(false).setDepth(10);
     this.sub = text(this, 0, 0, '', 14).setVisible(false).setDepth(10);
     this.skillText = text(this, 0, 0, '', 34, '#2ec4b6').setVisible(false).setDepth(11);
+    this.gbG = this.add.graphics().setDepth(5);
+    this.vignette = this.add.graphics().setDepth(1);
+    this.gbText = text(this, 0, 0, '', 8, '#ffd21f', 0).setDepth(6);
+    this.comboText = text(this, 0, 0, '', 10, '#2ec4b6').setDepth(6).setVisible(false);
+    this.hintText = text(this, 0, 0, '', 12, '#ffffff').setDepth(6).setVisible(false);
+    this.trainText = text(this, 0, 0, '', 8, '#cfc8e0', 0).setDepth(6).setVisible(false);
+    this.match.events.on('hint', this.onHint, this);
+    this.events.once('shutdown', () => this.match.events.off('hint', this.onHint, this));
 
     this.replayBars = this.add.graphics().setVisible(false);
     this.replayText = text(this, 0, 0, '● REPLAY', 14, '#ff4d6d', 0).setVisible(false).setDepth(10);
@@ -142,7 +158,7 @@ export class HudScene extends Phaser.Scene {
     this.homeName.setPosition(cx - bw / 2 + 26, top + 20);
     this.awayName.setPosition(cx + bw / 2 - 26, top + 20);
     this.scoreText.setPosition(cx, top + 20);
-    this.clockText.setPosition(cx, top + 54);
+    this.clockText.setPosition(cx, top + 66);
 
     this.pauseBtn.setPosition(ins.l + 4, top + 18);
     this.muteBtn.setPosition(w - ins.r - 4, top + 18);
@@ -204,13 +220,38 @@ export class HudScene extends Phaser.Scene {
         this.toast('SOFFIATA!', e.team === 0 ? '#7cff6b' : '#ff4d6d');
         break;
       case 'heavyTouch':
-        if (e.team === 0) this.toast('PALLA LUNGA!', '#ffb14d');
+        if (e.team === 0) this.toast(e.label ?? 'PALLA LUNGA!', '#ffb14d');
         break;
       case 'dodge':
         this.toast('SALTATO!', '#2ec4b6');
         break;
       case 'special':
         this.showSkill(e);
+        if (e.pts) this.moveLabel('', '#ffd21f', e.pts);
+        break;
+      case 'trick':
+        if (e.label && e.skill !== 'palleggio') this.moveLabel(e.label, e.team === 0 ? '#2ec4b6' : '#ff9f9f', e.pts);
+        else if (e.label) this.toast(e.label, '#2ec4b6');
+        break;
+      case 'trickFail':
+        this.moveLabel(e.label ?? 'LETTO!', e.team === 0 ? '#ff4d6d' : '#7cff6b');
+        break;
+      case 'wallPass':
+        this.moveLabel(e.label ?? 'WALL PASS!', '#00e5ff', e.pts);
+        break;
+      case 'combo':
+        if (e.team === 0) this.toast(e.label ?? 'COMBO', '#2ec4b6');
+        break;
+      case 'gamebreaker':
+        this.showBanner('GAMEBREAKER!', s.teams[e.team ?? 0].name, 1400, true);
+        break;
+      case 'gbEnd':
+        this.toast('FINE GAMEBREAKER', '#ffb14d');
+        break;
+      case 'header':
+      case 'volley':
+      case 'bicycle':
+        this.moveLabel(e.label ?? '', '#ffd21f', e.pts);
         break;
       case 'end': {
         const [a, b] = s.score;
@@ -235,6 +276,11 @@ export class HudScene extends Phaser.Scene {
       .setAngle(-8);
     this.tweens.add({ targets: this.skillText, scale: 1, angle: 0, duration: 320, ease: 'Back.Out' });
     this.tweens.add({ targets: this.skillText, alpha: 0, delay: 1100, duration: 350 });
+  }
+
+  private onHint(label: string): void {
+    this.hintT = this.time.now;
+    this.hintText.setText(`PALLA ALTA: TIRA = ${label}`);
   }
 
   private onReplay(on: boolean): void {
@@ -286,10 +332,25 @@ export class HudScene extends Phaser.Scene {
   update(): void {
     const s = this.match.state;
     this.scoreText.setText(`${s.score[0]} - ${s.score[1]}`);
-    this.clockText.setText(fmtClock(s.clock));
+    this.clockText.setText(s.mode === 'training' ? 'ALLENAMENTO' : fmtClock(s.clock));
     this.clockText.setColor(s.clock <= 10 && s.phase === 'play' ? '#ff4d6d' : '#ffffff');
     this.drawCard(s);
     this.drawRadar(s);
+    this.drawGb(s);
+    this.updateGbButton(s);
+    const { w, h } = view(this);
+    this.hintText.setVisible(this.time.now - this.hintT < 120).setPosition(w / 2, h - safeInsets(this).b - (this.touchOn ? 300 : 90));
+    if (s.mode === 'training') {
+      const ins = safeInsets(this);
+      this.trainText
+        .setVisible(true)
+        .setPosition(ins.l + (this.touchOn ? 40 : 6), this.touchOn ? ins.t + 128 : ins.t + 74)
+        .setText(
+          this.touchOn
+            ? 'ALLENAMENTO · swipe a destra = trucchi (lungo = avanzati)\nPAUSA → RESET per ricominciare'
+            : 'ALLENAMENTO · L + direzione = trucchi (Spazio = avanzati)\nE = protezione · O verso il muro = uno-due · R = reset · F2 = debug',
+        );
+    }
     if (this.touchOn) this.updateTouchLabels(s);
   }
 
@@ -420,6 +481,11 @@ export class HudScene extends Phaser.Scene {
       }
       return;
     }
+    if (p.x >= w * 0.5) {
+      // Metà destra fuori dai pulsanti: SWIPE = trick stick.
+      this.grabs.set(p.id, { kind: 'swipe', x: p.x, y: p.y });
+      return;
+    }
     if (p.x < w * 0.5 && ![...this.grabs.values()].some((g) => g.kind === 'stick')) {
       // Joystick dinamico: nasce dove appoggi il pollice.
       this.grabs.set(p.id, { kind: 'stick' });
@@ -480,6 +546,20 @@ export class HudScene extends Phaser.Scene {
     const g = this.grabs.get(p.id);
     if (!g) return;
     this.grabs.delete(p.id);
+    if (g.kind === 'swipe') {
+      const dx = p.x - g.x;
+      const dy = p.y - g.y;
+      const d = Math.hypot(dx, dy);
+      if (d > 26) {
+        // Swipe corto = trucco base, lungo = trucco avanzato. Dura qualche fotogramma.
+        touchState.tsx = dx / d;
+        touchState.tsy = dy / d;
+        touchState.tmod = d > 120;
+        touchState.tframes = 4;
+        this.swipeFx(g.x, g.y, p.x, p.y, d > 120);
+      }
+      return;
+    }
     if (g.kind === 'stick') {
       touchState.sx = 0;
       touchState.sy = 0;
@@ -491,7 +571,7 @@ export class HudScene extends Phaser.Scene {
 
   private releaseAll(): void {
     this.grabs.clear();
-    Object.assign(touchState, { sx: 0, sy: 0, pass: false, lob: false, through: false, shoot: false, sprint: false, skill: false, feint: false, pause: false });
+    Object.assign(touchState, { sx: 0, sy: 0, tsx: 0, tsy: 0, tframes: 0, pass: false, lob: false, through: false, shoot: false, sprint: false, skill: false, shield: false, gb: false, pause: false });
     if (this.stickBase) this.parkStick();
     if (this.buttons.length) this.syncButtons();
   }
@@ -514,6 +594,14 @@ export class HudScene extends Phaser.Scene {
     return this.hasBallLabels || b.alt !== '';
   }
 
+  /** Scia dello swipe: si vede che il trucco è partito. */
+  private swipeFx(x0: number, y0: number, x1: number, y1: number, adv: boolean): void {
+    const g = this.add.graphics().setDepth(30);
+    g.lineStyle(adv ? 10 : 6, adv ? 0xffd21f : 0xffffff, 0.7).lineBetween(x0, y0, x1, y1);
+    g.fillStyle(adv ? 0xffd21f : 0xffffff, 0.9).fillCircle(x1, y1, adv ? 9 : 6);
+    this.tweens.add({ targets: g, alpha: 0, duration: 260, onComplete: () => g.destroy() });
+  }
+
   /** Con o senza palla i pulsanti cambiano significato (e scritta). */
   private updateTouchLabels(s: MatchState): void {
     const c = s.controllers[0];
@@ -527,5 +615,73 @@ export class HudScene extends Phaser.Scene {
       b.t.setText(attacking || !b.alt ? b.label : b.alt);
       this.drawButton(b, this.enabledFor(b));
     }
+  }
+
+  /** Il pulsante GB compare solo quando la barra è piena. */
+  private updateGbButton(s: MatchState): void {
+    const b = this.buttons.find((x) => x.key === 'gb');
+    if (!b) return;
+    const on = this.touchOn && s.gb[0] >= 1 && s.gbActive[0] <= 0;
+    b.g.setVisible(on);
+    b.t.setVisible(on);
+    if (on) b.g.setAlpha(0.6 + 0.4 * Math.abs(Math.sin(this.time.now / 160)));
+  }
+
+  // --- Gamebreaker, combo, nomi delle mosse -----------------------------------------------
+
+  private drawGb(s: MatchState): void {
+    const { w, h } = view(this);
+    const ins = safeInsets(this);
+    const g = this.gbG.clear();
+    const bw = Math.min(460, w - ins.l - ins.r - 140);
+    const half = bw / 2 - 30;
+    const y = ins.t + 44;
+    const now = this.time.now;
+    for (const t of [0, 1] as const) {
+      const x0 = t === 0 ? w / 2 - bw / 2 + 6 : w / 2 + 24;
+      const active = s.gbActive[t] > 0;
+      const v = active ? s.gbActive[t] / 10 : s.gb[t];
+      const full = !active && s.gb[t] >= 1;
+      const kit = s.teams[t].kit;
+      g.fillStyle(0x0d0b14, 0.85).fillRect(x0, y, half, 8);
+      const col = active ? 0xff7b1f : full && Math.floor(now / 150) % 2 ? 0xffffff : kit.shirt === 0xffffff ? 0xffd21f : kit.shirt;
+      g.fillStyle(col, 1).fillRect(x0 + 1, y + 1, (half - 2) * Math.min(1, v), 6);
+      g.lineStyle(1, 0xffffff, 0.5).strokeRect(x0, y, half, 8);
+    }
+    const mine = s.gbActive[0] > 0;
+    const ready = s.gb[0] >= 1 && !mine;
+    this.gbText.setPosition(w / 2 - bw / 2 + 6, y + 36).setVisible(ready || mine);
+    if (mine) this.gbText.setText('GAMEBREAKER!').setColor('#ff7b1f');
+    else if (ready) this.gbText.setText(this.touchOn ? 'GB PRONTO: TOCCA GB!' : 'GB PRONTO: G / SELECT').setColor(Math.floor(now / 200) % 2 ? '#ffd21f' : '#ffffff');
+    const c = s.combo[0];
+    this.comboText.setVisible(c.n >= 2 && c.t > 0).setText(`COMBO x${c.mult.toFixed(1)}`).setPosition(w / 2, y + 40);
+    // Bordo infuocato quando il Gamebreaker è attivo (una delle due squadre).
+    const any = s.gbActive[0] > 0 ? 0 : s.gbActive[1] > 0 ? 1 : -1;
+    const v2 = this.vignette.clear();
+    if (any >= 0) {
+      const a = 0.25 + 0.15 * Math.sin(now / 120);
+      const col = any === 0 ? 0xff7b1f : 0xff2e2e;
+      for (let i = 0; i < 4; i++) v2.lineStyle(14 - i * 3, col, a * (1 - i * 0.2)).strokeRect(i * 6, i * 6, w - i * 12, h - i * 12);
+    }
+  }
+
+  /** Nome della mossa al centro, con i punti Gamebreaker guadagnati. */
+  private moveLabel(label: string, color: string, pts?: number): void {
+    const { w } = view(this);
+    const y = safeInsets(this).t + 120;
+    const t = text(this, w / 2, y, label, 20, color).setDepth(12).setScale(0.4);
+    const extra = pts && pts > 0.001 ? text(this, w / 2, y + 26, `+${Math.round(pts * 100)}% GB`, 10, '#ffd21f').setDepth(12) : null;
+    this.tweens.add({ targets: t, scale: 1, duration: 220, ease: 'Back.Out' });
+    this.tweens.add({
+      targets: [t, extra].filter(Boolean),
+      alpha: 0,
+      y: '-=16',
+      delay: 650,
+      duration: 380,
+      onComplete: () => {
+        t.destroy();
+        extra?.destroy();
+      },
+    });
   }
 }

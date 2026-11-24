@@ -10,17 +10,17 @@ const R = PHYS.ballRadius;
 const HALF_GOAL = FIELD.goalWidth / 2;
 
 /** Un passo di rotolamento (palla a terra): stessa formula usata da stepBall. */
-function rollStep(speed: number): number {
-  return Math.max(0, speed - (PHYS.rollFriction + PHYS.rollDrag * speed) * DT);
+function rollStep(speed: number, f = 1): number {
+  return Math.max(0, speed - (PHYS.rollFriction + PHYS.rollDrag * speed) * f * DT);
 }
 
 /** Distanza percorsa rotolando da v0 finché la velocità scende a vEnd (stessa integrazione del gioco). */
-export function rollDistance(v0: number, vEnd: number): number {
+export function rollDistance(v0: number, vEnd: number, f = 1): number {
   let v = v0;
   let d = 0;
   let guard = 0;
   while (v > vEnd && guard++ < 2000) {
-    const nv = rollStep(v);
+    const nv = rollStep(v, f);
     d += nv * DT; // stepBall integra la posizione con la velocità aggiornata
     v = nv;
     if (nv === 0) break;
@@ -32,25 +32,25 @@ export function rollDistance(v0: number, vEnd: number): number {
  * Velocità iniziale per un rasoterra che percorre `dist` metri e arriva a `vEnd` m/s.
  * Bisezione deterministica sulla stessa fisica di stepBall: il passaggio arriva davvero.
  */
-export function groundSpeedFor(dist: number, vEnd: number): number {
+export function groundSpeedFor(dist: number, vEnd: number, f = 1): number {
   let lo = vEnd;
   let hi: number = PHYS.maxBallSpeed;
-  if (rollDistance(hi, vEnd) < dist) return hi;
+  if (rollDistance(hi, vEnd, f) < dist) return hi;
   for (let i = 0; i < 22; i++) {
     const mid = (lo + hi) / 2;
-    if (rollDistance(mid, vEnd) < dist) lo = mid;
+    if (rollDistance(mid, vEnd, f) < dist) lo = mid;
     else hi = mid;
   }
   return hi;
 }
 
 /** Secondi per percorrere `dist` rotolando partendo da v0 (stima per gli anticipi). */
-export function rollTime(v0: number, dist: number): number {
+export function rollTime(v0: number, dist: number, f = 1): number {
   let v = v0;
   let d = 0;
   let t = 0;
   while (d < dist && v > 0.05 && t < 6) {
-    v = rollStep(v);
+    v = rollStep(v, f);
     d += v * DT;
     t += DT;
   }
@@ -91,7 +91,7 @@ export function stepBall(s: MatchState): number {
   } else {
     const sp = len(b.vx, b.vy);
     if (sp > 0) {
-      const k = rollStep(sp) / sp;
+      const k = rollStep(sp, s.tune.friction) / sp;
       b.vx *= k;
       b.vy *= k;
     }
@@ -126,14 +126,14 @@ export function stepBall(s: MatchState): number {
     b.y = R;
     if (b.vy < 0) {
       wallHit(s, Math.abs(b.vy));
-      b.vy = -b.vy * PHYS.wallRestitution;
+      b.vy = -b.vy * s.tune.wall;
       b.spin = 0;
     }
   } else if (b.y > FIELD.width - R) {
     b.y = FIELD.width - R;
     if (b.vy > 0) {
       wallHit(s, Math.abs(b.vy));
-      b.vy = -b.vy * PHYS.wallRestitution;
+      b.vy = -b.vy * s.tune.wall;
       b.spin = 0;
     }
   }
@@ -170,7 +170,7 @@ function insideGoal(s: MatchState, prevX: number): number {
       b.vz = Math.abs(b.vz) * 0.5 + 1;
       s.events.push({ type: 'post', power: speed, x: lineX, y: b.y, z: b.z });
     } else {
-      b.vx = -b.vx * PHYS.wallRestitution;
+      b.vx = -b.vx * s.tune.wall;
       wallHit(s, speed);
     }
     return -1;
@@ -222,19 +222,29 @@ export function attachBall(s: MatchState, sprinting: boolean): void {
   const amp = sprinting ? dribbleAmpSprint(p.stats) : dribbleAmpWalk(p.stats);
   let off = DRIBBLE_BASE + amp * tri * moving;
   let lat = 0;
-  if (p.action.kind === 'elastico') {
+  if (p.action.kind === 'elastico' || (p.action.kind === 'trick' && p.action.id === 'elastico')) {
     // Elastico: la palla va fuori col piede e poi rientra dall'altra parte.
     const t = p.action.t / p.action.dur;
     lat = p.action.side * (t < 0.4 ? -t / 0.4 : -1 + (t - 0.4) * 3.3) * 0.45;
     off = 0.38;
-  } else if (p.action.kind === 'veronica') {
+  } else if (p.action.kind === 'veronica' || (p.action.kind === 'trick' && p.action.id === 'ruleta')) {
     off = 0.35;
+  } else if (p.shield) {
+    // Protezione: palla sul piede lontano dal difensore.
+    off = 0.5;
   }
   // Il punto di guida segue lo sguardo, che con la palla gira più lentamente.
   p.ballOff = off;
   b.x = p.x + p.fx * off - p.fy * lat;
   b.y = p.y + p.fy * off + p.fx * lat;
   b.z = 0;
+  if (p.juggle > 0) {
+    // Palleggio: la palla sale e scende davanti al giocatore.
+    const ph = (p.juggle * 2.2) % 1;
+    b.z = 0.15 + 0.75 * (ph < 0.5 ? ph * 2 : 2 - ph * 2);
+    b.x = p.x + p.fx * 0.32;
+    b.y = p.y + p.fy * 0.32;
+  }
   b.vx = p.vx;
   b.vy = p.vy;
   b.vz = 0;
