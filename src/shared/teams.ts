@@ -6,8 +6,13 @@ type Row = [name: string, num: number, spd: number, sho: number, pas: number, dr
 const SKIN = { light: 0xf1c7a1, tan: 0xd59a6c, brown: 0xa86b42, dark: 0x6e4428 } as const;
 const HAIR = { black: 0x1b1410, brown: 0x5a3520, blond: 0xe0b84a, red: 0xa2401c, white: 0xdcdcdc } as const;
 
-function look(skin: number, hair: number, hairStyle: PlayerLook['hairStyle']): PlayerLook {
-  return { skin, hair, hairStyle };
+const STYLES: PlayerLook['hairStyle'][] = ['buzz', 'short', 'curly', 'mohawk', 'long', 'bald'];
+const BOOTS = [0x111111, 0xffffff, 0xff4d6d, 0x2ec4b6, 0xffd21f, 0xff8a1f, 0x7c4dff];
+let bootSeq = 0;
+
+/** hairStyle: 0 rasato, 1 corti, 2 ricci, 3 cresta, 4 lunghi, 5 calvo. */
+function look(skin: number, hair: number, style: number): PlayerLook {
+  return { skin, hair, hairStyle: STYLES[style], boots: BOOTS[bootSeq++ % BOOTS.length] };
 }
 
 function makeTeam(
@@ -63,7 +68,7 @@ export const TEAMS: TeamDef[] = [
     [
       ['Lafleur', 16, 62, 30, 60, 40, 82, 78, look(SKIN.light, HAIR.brown, 1)],
       ['Mbossa', 5, 82, 55, 70, 66, 82, 88, look(SKIN.dark, HAIR.black, 0)],
-      ['Garnier', 6, 76, 70, 88, 80, 66, 64, look(SKIN.light, HAIR.blond, 1)],
+      ['Garnier', 6, 76, 70, 88, 80, 66, 64, look(SKIN.light, HAIR.blond, 4)],
       ['Dukassé', 11, 92, 80, 72, 86, 48, 70, look(SKIN.dark, HAIR.black, 3)],
       ['Berthou', 9, 80, 90, 70, 78, 50, 84, look(SKIN.tan, HAIR.black, 2)],
     ],
@@ -77,9 +82,9 @@ export const TEAMS: TeamDef[] = [
     { shirt: 0x2b7bd6, trim: 0xffffff, shorts: 0xffffff, socks: 0x2b7bd6 },
     { shirt: 0xff8a1f, trim: 0x111111, shorts: 0x111111, socks: 0xff8a1f },
     [
-      ['Saracinesca', 1, 60, 30, 64, 40, 88, 80, look(SKIN.light, HAIR.black, 0)],
+      ['Saracinesca', 1, 60, 30, 64, 40, 88, 80, look(SKIN.light, HAIR.black, 5)],
       ['Mastino', 3, 70, 50, 70, 60, 90, 90, look(SKIN.tan, HAIR.black, 1)],
-      ['Regista', 21, 66, 74, 92, 82, 70, 60, look(SKIN.light, HAIR.brown, 2)],
+      ['Regista', 21, 66, 74, 92, 82, 70, 60, look(SKIN.light, HAIR.brown, 4)],
       ['Scugnizzo', 7, 86, 78, 74, 88, 56, 62, look(SKIN.tan, HAIR.black, 3)],
       ['Bomber', 9, 78, 90, 66, 74, 52, 86, look(SKIN.light, HAIR.red, 1)],
     ],
@@ -96,7 +101,7 @@ export const TEAMS: TeamDef[] = [
       ['Pulpo', 1, 62, 30, 60, 40, 84, 76, look(SKIN.tan, HAIR.black, 1)],
       ['Garra', 2, 74, 52, 66, 62, 86, 86, look(SKIN.tan, HAIR.black, 0)],
       ['Pibe', 10, 84, 84, 88, 94, 44, 55, look(SKIN.light, HAIR.brown, 1)],
-      ['Gambeta', 22, 90, 76, 74, 88, 50, 60, look(SKIN.tan, HAIR.black, 2)],
+      ['Gambeta', 22, 90, 76, 74, 88, 50, 60, look(SKIN.tan, HAIR.black, 4)],
       ['Tanque', 9, 74, 88, 62, 70, 60, 92, look(SKIN.brown, HAIR.black, 3)],
     ],
   ),
@@ -110,7 +115,7 @@ export const TEAMS: TeamDef[] = [
     { shirt: 0x6a2bd6, trim: 0xffffff, shorts: 0x111111, socks: 0x6a2bd6 },
     [
       ['Muralha', 1, 60, 30, 62, 40, 80, 77, look(SKIN.light, HAIR.black, 1)],
-      ['Rocha', 4, 72, 54, 70, 60, 84, 87, look(SKIN.tan, HAIR.brown, 0)],
+      ['Rocha', 4, 72, 54, 70, 60, 84, 87, look(SKIN.tan, HAIR.brown, 5)],
       ['Maestro', 8, 74, 76, 90, 84, 62, 63, look(SKIN.light, HAIR.brown, 2)],
       ['Foguete', 17, 92, 80, 70, 88, 46, 66, look(SKIN.brown, HAIR.black, 3)],
       ['Canhão', 7, 82, 92, 72, 86, 48, 80, look(SKIN.tan, HAIR.black, 1)],

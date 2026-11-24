@@ -18,6 +18,24 @@ Simulare partite CPU contro CPU senza grafica (bilanciamento):
 npx tsx scripts/sim.ts 10
 ```
 
+## Grafica dei giocatori (sprite generati)
+
+Gli sprite sheet sono generati da codice, nessun asset esterno:
+
+```bash
+npm run sprites
+```
+
+- `scripts/sprites/rig.ts`: scheletro, proporzioni, volumi del corpo e dei 6 tagli di capelli
+- `scripts/sprites/anims.ts`: pose di ogni animazione (giocatori e portiere)
+- `scripts/sprites/render.ts`: rasterizzatore pixel art isometrico (luce, fasce, contorni)
+- `scripts/sprites/generate.ts`: 5 direzioni (+3 specchiate), atlas Phaser, palla, ombra, anteprima
+
+Ogni materiale è un livello in scala di grigi tinto in gioco: pelle, capelli (taglio e colore),
+maglia, bordi, pantaloncini, calzettoni, scarpe, guanti e numero sono personalizzabili per giocatore
+(`PlayerLook` + `Kit` in `src/shared/types.ts`). Anteprima in `docs/art/players-preview.png`,
+galleria animata dal menu (GIOCATORI). Direzione artistica e provenienza: `docs/art/`.
+
 ## Struttura
 
 - `src/shared/`: **logica di gioco senza Phaser**. Passo fisso a 60 Hz, deterministica

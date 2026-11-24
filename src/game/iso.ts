@@ -2,9 +2,10 @@
 // La squadra di casa (0) attacca verso x = length, cioè in alto a destra sullo schermo:
 // la porta avversaria sta sulla parete di fondo, sempre ben visibile.
 
-export const HW = 16; // pixel per metro, metà larghezza del rombo
-export const HH = 8; // pixel per metro, metà altezza del rombo
-export const ZPX = 18; // pixel per metro di altezza
+// Scala usata anche dallo script degli sprite (scripts/sprites): stesso pixel nel gioco e negli asset.
+export const HW = 24; // pixel per metro, metà larghezza del rombo
+export const HH = 12; // pixel per metro, metà altezza del rombo
+export const ZPX = 27; // pixel per metro di altezza (2·HH/ZPX = vista isometrica coerente)
 
 export function isoX(x: number, y: number): number {
   return (x + y) * HW;

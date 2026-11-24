@@ -9,7 +9,7 @@ import { attackDir } from '../../shared/world';
 import type { MatchEvent, MatchState, PlayerInput, PlayerState } from '../../shared/types';
 import { isoDepth, isoX, isoY, screenToWorldDir, worldToScreenDir } from '../iso';
 import { drawField, worldBounds } from '../render/field';
-import { FRAME_H, makePlayerTexture, type FrameName } from '../render/textures';
+import { PlayerSprite, dir8 } from '../render/playerSprite';
 import { InputManager, isTouchDevice } from '../input/InputManager';
 import { sfx, unlockAudio } from '../fx/sfx';
 import { view } from '../ui';
@@ -26,25 +26,32 @@ const REPLAY_START = 2.4;
 const REPLAY_SPEED = 0.7;
 const REPLAY_LEN = 200;
 /** Altezza del mondo visibile (pixel isometrici): più piccola = camera più vicina. */
-const VISIBLE_H_TOUCH = 225;
-const VISIBLE_H_DESKTOP = 320;
+const VISIBLE_H_TOUCH = 310;
+const VISIBLE_H_DESKTOP = 440;
+/** Altezza del giocatore in pixel (per freccia e barra di carica). */
+const FIG_H = 58;
+/** Raggio della palla nello sprite (pixel) e lunghezza di un giro per fotogramma (m). */
+const BALL_R = 6.4;
+const BALL_STEP = (2 * Math.PI * 0.22) / 16;
 
 interface PlayerView {
   shadow: Phaser.GameObjects.Image;
-  sprite: Phaser.GameObjects.Sprite;
-  tex: string;
+  ps: PlayerSprite;
   runDist: number;
   ghostT: number;
+  lastKind: string;
+  lockDir: number;
+  catchT: number;
 }
 
 interface ReplayFrame {
   b: [number, number, number];
-  p: number[]; // per giocatore: x, y, fx, fy, codice posa
+  p: number[]; // per giocatore: x, y, fx, fy, codice posa, avanzamento, velocità
   speed: number;
 }
 
 const ACTION_CODES = [
-  'none', 'kick', 'tackle', 'shoulder', 'slide', 'fall', 'stagger', 'feint', 'veronica',
+  'none', 'kick', 'shoot', 'tackle', 'shoulder', 'slide', 'fall', 'stagger', 'feint', 'veronica',
   'elastico', 'sombrero', 'tunnel', 'rabona', 'dive', 'stunned', 'celebrate',
 ];
 const SKILL_KINDS = new Set(['veronica', 'elastico', 'sombrero', 'tunnel', 'rabona']);
@@ -123,19 +130,17 @@ export class MatchScene extends Phaser.Scene {
       const t = p.team === 0 ? home : away;
       const def = t.players[p.idx % 5];
       const kit = p.role === 'gk' ? t.gkKit : t.kit;
-      const key = `pl-${t.id}-${p.idx % 5}-${p.team}`;
-      makePlayerTexture(this, key, kit, def.look, def.number);
       const shadow = this.add.image(0, 0, 'shadow').setDepth(10);
-      const sprite = this.add.sprite(0, 0, key, 'idle').setOrigin(0.5, 1);
-      this.views.push({ shadow, sprite, tex: key, runDist: 0, ghostT: 0 });
+      const ps = new PlayerSprite(this, { look: def.look, kit, number: def.number, gk: p.role === 'gk' });
+      this.views.push({ shadow, ps, runDist: 0, ghostT: 0, lastKind: 'none', lockDir: 0, catchT: -10 });
     }
 
     this.ring = this.add.image(0, 0, 'ring').setDepth(11).setTint(0xffd21f);
     this.targetRing = this.add.image(0, 0, 'ring').setDepth(11).setTint(0x2ec4b6).setVisible(false);
     this.arrow = this.add.image(0, 0, 'arrow').setDepth(6000).setTint(0xffd21f);
-    this.ballShadow = this.add.image(0, 0, 'shadow').setScale(0.45).setDepth(12);
+    this.ballShadow = this.add.image(0, 0, 'shadow').setScale(0.4).setDepth(12);
     this.trail = this.add.graphics().setDepth(4900);
-    this.ball = this.add.image(0, 0, 'ball');
+    this.ball = this.add.image(0, 0, 'ballroll', 0);
     this.overlay = this.add.graphics().setDepth(6001);
 
     this.dust = this.add.particles(0, 0, 'puff', {
@@ -271,7 +276,10 @@ export class MatchScene extends Phaser.Scene {
     if (s.phase !== 'play') return;
     const b = s.ball;
     const p: number[] = [];
-    for (const q of s.players) p.push(q.x, q.y, q.fx, q.fy, ACTION_CODES.indexOf(q.action.kind));
+    for (const q of s.players) {
+      const prog = q.action.dur > 0 ? Math.min(1, q.action.t / q.action.dur) : 0;
+      p.push(q.x, q.y, q.fx, q.fy, ACTION_CODES.indexOf(q.action.kind), prog, Math.hypot(q.vx, q.vy));
+    }
     this.history.push({ b: [b.x, b.y, b.z], p, speed: Math.hypot(b.vx, b.vy) });
     if (this.history.length > REPLAY_LEN + 40) this.history.shift();
   }
@@ -336,6 +344,7 @@ export class MatchScene extends Phaser.Scene {
         break;
       case 'catch':
         sfx.save();
+        if (e.p !== undefined) this.views[e.p].catchT = this.time.now;
         break;
       case 'dive':
         sfx.whoosh();
@@ -408,10 +417,10 @@ export class MatchScene extends Phaser.Scene {
       const fr = this.replay[i];
       const pf = this.replay[Math.max(0, i - 1)];
       s.players.forEach((p, k) => {
-        const o = k * 5;
+        const o = k * 7;
         const kind = ACTION_CODES[fr.p[o + 4]] ?? 'none';
         const step = Math.hypot(fr.p[o] - pf.p[o], fr.p[o + 1] - pf.p[o + 1]);
-        this.drawPlayer(p, fr.p[o], fr.p[o + 1], fr.p[o + 2], fr.p[o + 3], kind, step * 60 > 0.6, step, true);
+        this.drawPlayer(p, fr.p[o], fr.p[o + 1], fr.p[o + 2], fr.p[o + 3], kind, fr.p[o + 5], fr.p[o + 6], step, true);
       });
       this.drawBall(fr.b[0], fr.b[1], fr.b[2], fr.speed, false);
       this.ring.setVisible(false);
@@ -425,7 +434,8 @@ export class MatchScene extends Phaser.Scene {
       const x = Phaser.Math.Linear(this.prev[i * 2] ?? p.x, p.x, alpha);
       const y = Phaser.Math.Linear(this.prev[i * 2 + 1] ?? p.y, p.y, alpha);
       const sp = Math.hypot(p.vx, p.vy);
-      this.drawPlayer(p, x, y, p.fx, p.fy, p.action.kind, sp > 0.6, sp * DT, false);
+      const prog = p.action.dur > 0 ? Math.min(1, p.action.t / p.action.dur) : 0;
+      this.drawPlayer(p, x, y, p.fx, p.fy, p.action.kind, prog, sp, sp * DT, false);
     });
 
     const b = s.ball;
@@ -449,10 +459,10 @@ export class MatchScene extends Phaser.Scene {
     }
     const p = s.players[c.player];
     const v = this.views[c.player];
-    const x = v.sprite.x;
-    const y = v.sprite.y;
+    const x = v.ps.container.x;
+    const y = v.ps.container.y;
     this.ring.setVisible(true).setPosition(x, y);
-    this.arrow.setVisible(true).setPosition(x, y - FRAME_H - 8 + Math.sin(this.time.now / 140) * 2);
+    this.arrow.setVisible(true).setPosition(x, y - FIG_H - 8 + Math.sin(this.time.now / 140) * 2);
     if (s.ball.owner !== p.idx) return;
 
     const inp = this.lastInput;
@@ -465,15 +475,15 @@ export class MatchScene extends Phaser.Scene {
       const t = pickPassTarget(s, p, hasDir ? mx : p.fx, hasDir ? my : p.fy);
       if (t >= 0) {
         const tv = this.views[t];
-        this.targetRing.setVisible(true).setPosition(tv.sprite.x, tv.sprite.y).setAlpha(p.chargeKind === 'pass' ? 1 : 0.55);
+        this.targetRing.setVisible(true).setPosition(tv.ps.container.x, tv.ps.container.y).setAlpha(p.chargeKind === 'pass' ? 1 : 0.55);
       }
     }
 
     if (p.chargeKind === 'none') return;
     const w = 28;
     const col = p.chargeKind === 'pass' ? 0x2ec4b6 : p.charge > 0.8 ? 0xff4d6d : p.charge > 0.45 ? 0xffd21f : 0x7cff6b;
-    o.fillStyle(0x0d0b14, 0.85).fillRect(x - w / 2 - 1, y - FRAME_H - 24, w + 2, 6);
-    o.fillStyle(col, 1).fillRect(x - w / 2, y - FRAME_H - 23, w * p.charge, 4);
+    o.fillStyle(0x0d0b14, 0.85).fillRect(x - w / 2 - 1, y - FIG_H - 24, w + 2, 6);
+    o.fillStyle(col, 1).fillRect(x - w / 2, y - FIG_H - 23, w * p.charge, 4);
 
     if (p.chargeKind === 'shot') {
       // Mirino sulla porta e traiettoria tratteggiata: dove andrà il tiro.
@@ -503,6 +513,7 @@ export class MatchScene extends Phaser.Scene {
     }
   }
 
+  /** Sceglie animazione e fotogramma dallo stato della simulazione. */
   private drawPlayer(
     p: PlayerState,
     x: number,
@@ -510,124 +521,144 @@ export class MatchScene extends Phaser.Scene {
     fx: number,
     fy: number,
     kind: string,
-    moving: boolean,
+    prog: number,
+    speed: number,
     step: number,
     replay: boolean,
   ): void {
     const v = this.views[p.idx];
+    const ps = v.ps;
+    const F = ps.frames;
     const sx = isoX(x, y);
     const sy = isoY(x, y);
     const [dx, dy] = worldToScreenDir(fx, fy);
-    const back = dy < -0.5;
-    const a = p.action;
-    const prog = a.dur > 0 ? Math.min(1, a.t / a.dur) : 0;
-    let frame: FrameName = 'idle';
-    let lift = 0;
-    let flip = dx < 0;
-    let angle = 0;
-    const now = this.time.now;
+    let dir = dir8(dx, dy);
+    if (kind !== v.lastKind) {
+      v.lastKind = kind;
+      v.lockDir = dir;
+    }
+    const now = this.time.now / 1000;
+    const seq = (a: string) => Math.min(F[a].frames - 1, Math.floor(prog * F[a].frames));
+    const loop = (a: string) => Math.floor(now * F[a].fps) % F[a].frames;
+    let anim = 'idle';
+    let fr = 0;
     switch (kind) {
-      case 'kick':
-        frame = 'kick';
-        break;
+      case 'shoot':
       case 'rabona':
-        frame = prog < 0.6 ? 'rabona' : 'kick';
-        break;
       case 'tackle':
-        frame = 'tackle';
-        angle = (flip ? -1 : 1) * 10;
-        break;
       case 'shoulder':
-        frame = 'run2';
-        angle = (flip ? -1 : 1) * 20; // si appoggia con la spalla
-        break;
       case 'slide':
-        frame = 'slide';
-        if (!replay && Math.floor(now / 50) % 2 === 0) this.dust.explode(1, sx, sy);
+      case 'feint':
+      case 'elastico':
+      case 'sombrero':
+      case 'tunnel':
+        anim = ps.has(kind) ? kind : 'pass';
+        fr = seq(anim);
+        break;
+      case 'kick':
+        anim = 'pass';
+        fr = seq(anim);
+        break;
+      case 'veronica':
+        // La giravolta è già nell'animazione: direzione bloccata all'inizio.
+        anim = 'veronica';
+        fr = seq(anim);
+        dir = v.lockDir;
         break;
       case 'fall':
       case 'stunned':
-        frame = 'down';
+        anim = 'fall';
+        fr = Math.min(F.fall.frames - 1, Math.floor(Math.min(1, prog * 1.4) * F.fall.frames));
         break;
       case 'stagger':
-        // Barcolla: fuori tempo, o "caviglie rotte" dopo una skill.
-        frame = 'idle';
-        angle = Math.sin(now / 60) * 12;
+        anim = 'stagger';
+        fr = loop(anim);
+        break;
+      case 'celebrate':
+        anim = 'celebrate';
+        fr = loop(anim);
         break;
       case 'dive': {
-        frame = 'down';
-        lift = Math.sin(Math.PI * prog) * 16 + 4;
-        // In isometrico un tuffo verso +y va in basso a destra.
-        flip = (a.dy || 1) < 0;
+        // Tuffo verso la sinistra o la destra del portiere (lo specchio inverte i lati).
+        const out = p.team === 0 ? 1 : -1;
+        let left = (p.action.dy || 1) * out > 0;
+        dir = v.lockDir;
+        if (dir >= 5) left = !left;
+        anim = left ? 'diveL' : 'diveR';
+        fr = seq(anim);
         break;
       }
-      case 'celebrate':
-        frame = 'cheer';
-        lift = Math.abs(Math.sin(now / 110)) * 6;
-        break;
-      case 'veronica': {
-        const ph = Math.floor(now / 60) % 4;
-        frame = ph % 2 === 0 ? 'spin' : 'idle';
-        flip = ph >= 2;
-        break;
-      }
-      case 'elastico':
-        frame = prog < 0.4 ? 'kick' : 'run2';
-        flip = prog < 0.4 ? !flip : flip;
-        angle = (prog < 0.4 ? -1 : 1) * 10;
-        break;
-      case 'sombrero':
-        frame = prog < 0.35 ? 'kick' : 'run1';
-        lift = prog < 0.35 ? 3 : 0;
-        break;
-      case 'tunnel':
-      case 'feint':
-        frame = prog < 0.3 ? 'kick' : 'run2';
-        angle = (a.side || 1) * 8;
-        break;
-      default:
-        if (moving) {
+      default: {
+        const s = this.state;
+        if (p.role === 'gk' && s.ball.owner === p.idx && !replay) {
+          const since = (this.time.now - v.catchT) / 1000;
+          if (since < 0.35) {
+            anim = 'save';
+            fr = Math.min(F.save.frames - 1, Math.floor((since / 0.35) * F.save.frames));
+          } else {
+            anim = 'hold';
+            fr = loop(anim);
+          }
+        } else if (speed > 0.6) {
+          const sprint = p.role === 'field' && speed > 7.2;
+          anim = sprint ? 'sprint' : 'run';
           v.runDist += step;
-          frame = Math.floor(v.runDist * 2.4) % 2 === 0 ? 'run1' : 'run2';
-          lift = Math.floor(v.runDist * 4.8) % 2 === 0 ? 1 : 0;
+          const cycle = sprint ? 2.7 : 1.9;
+          fr = Math.floor((v.runDist / cycle) * F[anim].frames) % F[anim].frames;
+        } else if (p.role === 'gk') {
+          const gx = p.team === 0 ? 0 : FIELD.length;
+          anim = Math.abs(s.ball.x - gx) < 15 ? 'ready' : 'idle';
+          fr = loop(anim);
+        } else {
+          anim = 'idle';
+          fr = loop(anim);
         }
+      }
     }
-    const lying = frame === 'down' || frame === 'slide';
-    const name = back && !lying ? `${frame}_b` : frame;
-    v.sprite.setFrame(name).setPosition(sx, sy - lift).setFlipX(flip).setAngle(angle);
-    v.sprite.setDepth(isoDepth(x, y) + 0.5);
-    v.sprite.setAlpha(1);
-    v.shadow.setPosition(sx, sy).setDepth(isoDepth(x, y) - 0.5).setScale(lift > 4 ? 0.8 : 1);
+    ps.show(anim, fr, dir);
+    ps.setPosition(sx, sy).setDepth(isoDepth(x, y) + 0.5);
+    const lying = anim === 'slide' || anim === 'fall' || anim.startsWith('dive');
+    v.shadow.setPosition(sx, sy).setDepth(isoDepth(x, y) - 0.5).setScale(lying ? 1.35 : 1, lying ? 1.2 : 1);
 
     // Scia "fantasma" durante le skill: si vede bene il movimento.
     if (!replay && SKILL_KINDS.has(kind)) {
       v.ghostT -= this.game.loop.delta;
       if (v.ghostT <= 0) {
         v.ghostT = 45;
-        const ghost = this.add
-          .image(v.sprite.x, v.sprite.y, v.tex, name)
-          .setOrigin(0.5, 1)
-          .setFlipX(flip)
-          .setAngle(angle)
-          .setDepth(v.sprite.depth - 0.1)
-          .setTint(0x2ec4b6)
-          .setAlpha(0.55);
+        const ghost = ps.ghost(0x2ec4b6);
+        ghost.setDepth(ps.container.depth - 0.1).setAlpha(0.5);
         this.tweens.add({ targets: ghost, alpha: 0, duration: 260, onComplete: () => ghost.destroy() });
       }
     }
   }
 
+  private ballRoll = 0;
+  private ballAngle = 0;
+
   private drawBall(x: number, y: number, z: number, speed: number, owned: boolean): void {
+    const s = this.state;
+    // Il portiere tiene la palla in mano, all'altezza del petto.
+    const owner = owned ? s.players[s.ball.owner] : null;
+    if (owner && owner.role === 'gk' && s.phase === 'play') {
+      x = owner.x + owner.fx * 0.28;
+      y = owner.y + owner.fy * 0.28;
+      z = 1.0;
+    }
     const sx = isoX(x, y);
     const sy = isoY(x, y, z);
-    this.ball.setPosition(sx, sy - 5).setDepth(isoDepth(x, y) + (owned ? 0.7 : 0.6));
-    this.ball.setAngle(this.ball.angle + speed * 1.2);
-    const sh = Math.max(0.2, 0.45 - z * 0.06);
-    this.ballShadow.setPosition(isoX(x, y), isoY(x, y)).setScale(sh).setAlpha(Math.max(0.3, 1 - z * 0.15));
+    this.ball.setPosition(sx, sy - BALL_R).setDepth(isoDepth(x, y) + (owned ? 0.7 : 0.6));
+    // Rotazione visibile: fotogrammi del rotolamento + orientamento sulla direzione di moto.
+    const b = s.ball;
+    const [vx, vy] = worldToScreenDir(b.vx, b.vy);
+    if (Math.hypot(vx, vy) > 2) this.ballAngle = Math.atan2(vy, vx);
+    if (!(owner && owner.role === 'gk')) this.ballRoll += (speed * this.game.loop.delta) / 1000;
+    this.ball.setFrame(Math.floor(this.ballRoll / BALL_STEP) % 16).setRotation(this.ballAngle);
+    const sh = Math.max(0.18, 0.4 - z * 0.05);
+    this.ballShadow.setPosition(isoX(x, y), isoY(x, y)).setScale(sh, sh * 1.2).setAlpha(Math.max(0.35, 1 - z * 0.15));
     this.ballShadow.setDepth(isoDepth(x, y) - 0.6);
 
     if (!owned && speed > 7) {
-      this.trailPts.push({ x: sx, y: sy - 5, fire: speed > 21 || this.lastBallSpeed > 21 });
+      this.trailPts.push({ x: sx, y: sy - BALL_R, fire: speed > 21 || this.lastBallSpeed > 21 });
     } else if (this.trailPts.length) {
       this.trailPts.shift();
     }
@@ -637,11 +668,11 @@ export class MatchScene extends Phaser.Scene {
     const n = this.trailPts.length;
     for (let i = 1; i < n; i++) {
       const a = this.trailPts[i - 1];
-      const b = this.trailPts[i];
+      const c = this.trailPts[i];
       const k = i / n;
-      const col = b.fire ? (k > 0.6 ? 0xfff27a : 0xff7b1f) : 0xffffff;
-      this.trail.lineStyle(1 + k * (b.fire ? 6 : 4), col, k * (b.fire ? 0.85 : 0.5));
-      this.trail.lineBetween(a.x, a.y, b.x, b.y);
+      const col = c.fire ? (k > 0.6 ? 0xfff27a : 0xff7b1f) : 0xffffff;
+      this.trail.lineStyle(1 + k * (c.fire ? 8 : 5), col, k * (c.fire ? 0.85 : 0.5));
+      this.trail.lineBetween(a.x, a.y, c.x, c.y);
     }
   }
 
@@ -658,8 +689,8 @@ export class MatchScene extends Phaser.Scene {
       tz = base * 1.12;
     } else if (s.phase === 'goal' && s.lastGoal && s.lastGoal.scorer >= 0) {
       const v = this.views[s.lastGoal.scorer];
-      tx = v.sprite.x;
-      ty = v.sprite.y - 20;
+      tx = v.ps.container.x;
+      ty = v.ps.container.y - 30;
       tz = base * 1.25;
     } else {
       // Palla al centro, un po' verso il giocatore controllato e in avanti nella direzione d'attacco.
@@ -668,15 +699,15 @@ export class MatchScene extends Phaser.Scene {
       ty = this.ball.y;
       if (c && c.player >= 0) {
         const v = this.views[c.player];
-        tx = tx * 0.7 + v.sprite.x * 0.3;
-        ty = ty * 0.7 + v.sprite.y * 0.3;
+        tx = tx * 0.7 + v.ps.container.x * 0.3;
+        ty = ty * 0.7 + v.ps.container.y * 0.3;
       }
       const b = s.ball;
       const owner = b.owner >= 0 ? s.players[b.owner] : null;
       const ad = owner ? attackDir(owner.team) : 0;
       const [lx, ly] = worldToScreenDir(b.vx * 0.25 + ad * 2.5, b.vy * 0.25);
-      tx += Phaser.Math.Clamp(lx, -70, 70);
-      ty += Phaser.Math.Clamp(ly, -45, 45);
+      tx += Phaser.Math.Clamp(lx, -105, 105);
+      ty += Phaser.Math.Clamp(ly, -65, 65);
     }
     if (this.zoomPunch > 0) this.zoomPunch = Math.max(0, this.zoomPunch - dt * 0.9);
     const k = 1 - Math.exp(-dt * 5);

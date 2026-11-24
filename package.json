@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "sprites": "tsx scripts/sprites/generate.ts"
   },
   "engines": {
     "node": ">=20"
@@ -20,6 +21,8 @@
     "phaser": "^3.90.0"
   },
   "devDependencies": {
+    "@types/node": "^22.20.5",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vite": "^8.3.8",
     "vitest": "^5.1.1"

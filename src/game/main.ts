@@ -6,6 +6,7 @@ import { MatchScene } from './scenes/MatchScene';
 import { HudScene } from './scenes/HudScene';
 import { PauseScene } from './scenes/PauseScene';
 import { EndScene } from './scenes/EndScene';
+import { GalleryScene } from './scenes/GalleryScene';
 import { GAME_H, GAME_W } from './ui';
 import { setPadMessageHandler } from './input/InputManager';
 import { toast } from './fullscreen';
@@ -34,7 +35,7 @@ async function start() {
     },
     input: { activePointers: 6 },
     fps: { target: 60 },
-    scene: [BootScene, MenuScene, MatchScene, HudScene, PauseScene, EndScene],
+    scene: [BootScene, MenuScene, MatchScene, HudScene, PauseScene, EndScene, GalleryScene],
   });
   Object.assign(window, { game });
 
