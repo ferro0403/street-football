@@ -74,7 +74,12 @@ export type ActionKind =
   | 'rabona'
   | 'dive'
   | 'stunned'
-  | 'celebrate';
+  | 'celebrate'
+  /** Trucco del trick stick (l'id è in action.id). */
+  | 'trick'
+  | 'header'
+  | 'volley'
+  | 'bicycle';
 
 export interface PlayerAction {
   kind: ActionKind;
@@ -90,6 +95,10 @@ export interface PlayerAction {
   side: number;
   /** Bersaglio dell'azione (es. difensore saltato), -1 = nessuno. */
   target: number;
+  /** Id del trucco (azioni 'trick'), '' altrimenti. */
+  id: string;
+  /** Esito del duello: 0 in corso, 1 riuscito, -1 fallito. */
+  res: number;
 }
 
 export interface AiMemory {
@@ -97,6 +106,8 @@ export interface AiMemory {
   tx: number;
   ty: number;
   score: number;
+  /** Secondi di protezione palla decisi dalla CPU. */
+  shieldT: number;
 }
 
 export interface KeeperMemory {
@@ -140,6 +151,21 @@ export interface PlayerState {
   /** Dopo un controllo perso o un cambio brusco, breve pausa. */
   touchCd: number;
   slideCd: number;
+  /** In campo (false = escluso, es. allenamento con pochi difensori). */
+  active: boolean;
+  /** "Fatica" dei trucchi: sale a ogni trucco, scende col tempo (anti-spam). */
+  heat: number;
+  lastTrick: string;
+  trickCd: number;
+  /** Protezione palla (con palla) o contenimento (senza palla). */
+  shield: boolean;
+  /** Palleggio da fermo in corso. */
+  juggle: number;
+  /** Ultimo trucco visto da questo difensore e da quanto (per leggerlo). */
+  seenTrick: string;
+  seenT: number;
+  /** Contrasto premuto di recente (per leggere i trucchi o arrivare fuori tempo). */
+  tackleT: number;
   /** ID del controller umano che lo guida, null = CPU. */
   human: string | null;
   ai: AiMemory;
@@ -167,13 +193,17 @@ export interface BallState {
   shotY: number;
   /** Effetto: accelerazione laterale (m/s²) perpendicolare alla velocità. */
   spin: number;
-  /** 0 nessuno, 1 rasoterra, 2 lancio, 3 filtrante. */
+  /** 0 nessuno, 1 rasoterra, 2 lancio, 3 filtrante, 4 al muro, 5 uno-due col muro. */
   passKind: number;
   /** Punto dove andrà ricevuto il passaggio. */
   passTx: number;
   passTy: number;
   /** Squadra che ha segnato in questa azione (palla dentro la rete), -1 = no. */
   inGoal: number;
+  /** Il tiro in corso è un Gamebreaker (quasi imparabile). */
+  shotGb: boolean;
+  /** Chi ha fatto l'ultimo passaggio (per combo e passaggi al muro). */
+  passer: number;
 }
 
 export interface PlayerInput {
@@ -189,8 +219,17 @@ export interface PlayerInput {
   through: boolean;
   /** Con palla: tiro (tieni = più forte). Senza: contrasto in piedi. */
   shoot: boolean;
-  feint: boolean;
+  /** Trick stick: direzione nel mondo (levetta destra, tasto+direzione, swipe). */
+  tx: number;
+  ty: number;
+  /** Modificatore: trucchi avanzati e tiro piazzato. */
+  mod: boolean;
+  /** Tieni: protezione palla (con palla) o contenimento (senza). */
+  shield: boolean;
+  /** Skill speciale della nazione. */
   skill: boolean;
+  /** Attiva il Gamebreaker quando la barra è piena. */
+  gb: boolean;
   switch: boolean;
 }
 
@@ -225,6 +264,15 @@ export type MatchEventType =
   | 'dodge'
   | 'feint'
   | 'special'
+  | 'trick'
+  | 'trickFail'
+  | 'wallPass'
+  | 'combo'
+  | 'gamebreaker'
+  | 'gbEnd'
+  | 'header'
+  | 'volley'
+  | 'bicycle'
   | 'whistle'
   | 'kickoff'
   | 'end'
@@ -241,6 +289,9 @@ export interface MatchEvent {
   z?: number;
   skill?: string;
   ctrl?: string;
+  /** Testo da mostrare (nome della mossa) e punti Gamebreaker guadagnati. */
+  label?: string;
+  pts?: number;
 }
 
 export interface TeamMatchStats {
@@ -251,6 +302,15 @@ export interface TeamMatchStats {
   passes: number;
   fouls: number;
   possessionTicks: number;
+}
+
+export interface ComboState {
+  /** Mosse concatenate (trucco → passaggio → trucco...). */
+  n: number;
+  mult: number;
+  /** Secondi rimasti per continuare la combo. */
+  t: number;
+  last: '' | 'trick' | 'pass';
 }
 
 export interface TeamMeta {
@@ -282,4 +342,10 @@ export interface MatchState {
   stats: [TeamMatchStats, TeamMatchStats];
   /** Eventi prodotti nell'ultimo tick (per suoni ed effetti lato client). */
   events: MatchEvent[];
+  mode: 'match' | 'training';
+  tune: import('./tune').Tuning;
+  /** Barra Gamebreaker per squadra (0..1) e secondi di Gamebreaker attivo. */
+  gb: [number, number];
+  gbActive: [number, number];
+  combo: [ComboState, ComboState];
 }

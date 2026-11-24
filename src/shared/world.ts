@@ -10,7 +10,7 @@ export const ownGoalX = (team: TeamIndex): number => (team === 0 ? 0 : FIELD.len
 export const other = (team: TeamIndex): TeamIndex => (team === 0 ? 1 : 0);
 
 export function teamPlayers(s: MatchState, team: TeamIndex): PlayerState[] {
-  return s.players.filter((p) => p.team === team);
+  return s.players.filter((p) => p.active && p.team === team);
 }
 
 export function keeperOf(s: MatchState, team: TeamIndex): PlayerState {
@@ -25,7 +25,7 @@ export function nearestOpponent(
   let best: PlayerState | null = null;
   let bd = Infinity;
   for (const q of s.players) {
-    if (q.team === p.team) continue;
+    if (!q.active || q.team === p.team) continue;
     if (!includeKeeper && q.role === 'gk') continue;
     const d = dist(p.x, p.y, q.x, q.y);
     if (d < bd) {
@@ -40,7 +40,7 @@ export function nearestOpponent(
 export function openness(s: MatchState, team: TeamIndex, x: number, y: number, cap = 6): number {
   let bd = cap;
   for (const q of s.players) {
-    if (q.team === team) continue;
+    if (!q.active || q.team === team) continue;
     const d = dist(x, y, q.x, q.y);
     if (d < bd) bd = d;
   }
@@ -59,7 +59,7 @@ export function laneClear(
   ignoreKeeper = false,
 ): boolean {
   for (const q of s.players) {
-    if (q.team === team) continue;
+    if (!q.active || q.team === team) continue;
     if (ignoreKeeper && q.role === 'gk') continue;
     const { d, t } = segmentDistance(ax, ay, bx, by, q.x, q.y);
     if (t > 0.05 && t < 0.98 && d < width) return false;

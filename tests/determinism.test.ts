@@ -13,7 +13,10 @@ function script(t: number): InputMap {
       sprint: phase % 2 === 0,
       shoot: t % 97 > 70,
       pass: t % 61 > 50,
-      feint: t % 53 === 0,
+      tx: t % 53 === 0 ? 1 : 0,
+      ty: 0,
+      mod: t % 106 === 0,
+      shield: t % 400 > 380,
       skill: t % 211 === 0,
       switch: t % 300 === 0,
     }),
@@ -50,7 +53,7 @@ describe('determinismo e serializzazione', () => {
     };
     walk(a);
     const b = cloneState(a);
-    expect(b).toEqual(a);
+    expect(JSON.stringify(b)).toBe(JSON.stringify(a));
     for (let t = 900; t < 2500; t++) {
       stepMatch(a, script(t));
       stepMatch(b, script(t));

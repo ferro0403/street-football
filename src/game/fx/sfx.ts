@@ -145,4 +145,19 @@ export const sfx = {
   ui() {
     tone(660, 0.06, 'square', 0.08, 880);
   },
+  /** Trucco riuscito: fruscio + nota che sale. */
+  trick() {
+    noise(0.16, 0.18, 1600, 0.7, 0.03);
+    tone(520, 0.12, 'triangle', 0.14, 990);
+  },
+  /** Trucco letto o respinto: colpo sordo. */
+  thud() {
+    tone(110, 0.16, 'sine', 0.45, 55);
+    noise(0.12, 0.3, 400, 0.8);
+  },
+  /** Gamebreaker: accordo che sale + boato. */
+  gamebreaker() {
+    for (const f of [220, 277, 330, 440]) tone(f, 0.9, 'sawtooth', 0.05, f * 2);
+    noise(1.4, 0.3, 800, 0.4, 0.2);
+  },
 };

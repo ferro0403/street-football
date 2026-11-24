@@ -5,6 +5,8 @@ import { MenuNav } from '../input/MenuNav';
 import type { MatchData, MatchScene } from './MatchScene';
 import { fullscreenSupported, isFullscreen, toggleFullscreen } from '../fullscreen';
 import { sfx } from '../fx/sfx';
+import { trainingReset } from '../../shared/match';
+import { aimLineEnabled, setAimLine, toggleDebug } from '../debugPanel';
 
 export class PauseScene extends Phaser.Scene {
   private data_!: MatchData;
@@ -25,15 +27,19 @@ export class PauseScene extends Phaser.Scene {
     const { w, h } = view(this);
     this.add.rectangle(w / 2, h / 2, w, h, COLORS.ink, 0.72).setInteractive();
     const k = Math.min(1, h / 540);
-    text(this, w / 2, 70 * k + 20, 'PAUSA', 30, hexColor(COLORS.yellow));
+    text(this, w / 2, 40 * k + 16, 'PAUSA', 26, hexColor(COLORS.yellow));
     const actions: [string, () => void][] = [
       ['RIPRENDI', () => this.resume()],
       ['RICOMINCIA', () => this.restart()],
       ['MENU', () => this.toMenu()],
     ];
+    const m = this.scene.get('match') as MatchScene;
+    if (m.state?.mode === 'training') actions.unshift(['RESET ALLENAMENTO', () => { trainingReset(m.state); this.resume(); }]);
+    actions.push([`LINEA DI MIRA: ${aimLineEnabled() ? 'SI' : 'NO'}`, () => { setAimLine(!aimLineEnabled()); this.scene.restart({ data: this.data_ }); }]);
+    actions.push(['DEBUG (REGOLAZIONI)', () => { toggleDebug(() => m.state?.tune ?? null); }]);
     if (fullscreenSupported()) actions.push([isFullscreen() ? 'ESCI SCH. INTERO' : 'SCHERMO INTERO', () => this.fs()]);
-    const step = Math.min(66, (h - 160 * k) / actions.length);
-    actions.forEach(([l, fn], i) => this.btns.push({ b: button(this, w / 2, 150 * k + 20 + i * step, 300, Math.min(52, step - 10), l, fn), act: fn }));
+    const step = Math.min(60, (h - 140 * k) / actions.length);
+    actions.forEach(([l, fn], i) => this.btns.push({ b: button(this, w / 2, 100 * k + 14 + i * step, 340, Math.min(48, step - 8), l, fn), act: fn }));
     const input = new InputManager(this);
     input.bindEnter(this);
     this.nav = new MenuNav(input);
@@ -49,7 +55,7 @@ export class PauseScene extends Phaser.Scene {
   private fs(): void {
     toggleFullscreen(this);
     sfx.ui();
-    this.time.delayedCall(300, () => this.btns[3]?.b.label.setText(isFullscreen() ? 'ESCI SCH. INTERO' : 'SCHERMO INTERO'));
+    this.time.delayedCall(300, () => this.btns[this.btns.length - 1]?.b.label.setText(isFullscreen() ? 'ESCI SCH. INTERO' : 'SCHERMO INTERO'));
   }
 
   private resume(): void {

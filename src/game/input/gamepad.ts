@@ -16,11 +16,11 @@ export const PAD = {
   B: 1, // B / Cerchio → tiro (senza palla: contrasto)
   X: 2, // X / Quadrato → lancio alto (senza palla: scivolata)
   Y: 3, // Y / Triangolo → filtrante
-  LB: 4, // cambio giocatore
-  RB: 5, // skill
-  LT: 6, // finta
+  LB: 4, // skill speciale
+  RB: 5, // modificatore (trucchi avanzati, tiro piazzato)
+  LT: 6, // protezione palla / contenimento
   RT: 7, // scatto
-  SELECT: 8,
+  SELECT: 8, // Gamebreaker
   START: 9,
   L3: 10,
   UP: 12,
@@ -88,7 +88,7 @@ export class GamepadHub {
       let activity = false;
       gp.axes.forEach((v, i) => {
         if (Math.abs(v) < CENTER_GATE) c.centered[i] = true;
-        else if (c.centered[i] && Math.abs(v) > 0.6 && i < 2) activity = true;
+        else if (c.centered[i] && Math.abs(v) > 0.6 && i < 4) activity = true;
       });
       gp.buttons.forEach((b, i) => {
         const down = b.pressed || b.value > 0.5;

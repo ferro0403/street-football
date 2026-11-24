@@ -45,6 +45,8 @@ galleria animata dal menu (GIOCATORI). Direzione artistica e provenienza: `docs/
   - `ball.ts`: fisica della palla (gravità, rimbalzi, attrito, pareti, pali, reti)
   - `actions.ts`: tiro, passaggio, contrasto, finta, skill speciali
   - `ai.ts`: IA di compagni e avversari · `keeper.ts`: portiere CPU
+  - `tricks.ts`: trick stick, trucchi a duello, anti-spam · `walls.ts`: muri della gabbia
+  - `gamebreaker.ts`: barra e combo · `aerial.ts`: palle alte · `tune.ts`: parametri del pannello F2
   - `stats.ts`: come le statistiche (velocità, tiro, passaggio, dribbling, difesa, forza)
     diventano numeri di gioco: tutto il bilanciamento
   - `teams.ts`: squadre di prova (nomi inventati)
@@ -53,21 +55,31 @@ galleria animata dal menu (GIOCATORI). Direzione artistica e provenienza: `docs/
 
 ## Comandi di gioco
 
-| Azione | Tastiera | Controller | Touch |
+| Azione | Tastiera | Controller | Telefono |
 |---|---|---|---|
-| Movimento | WASD / frecce | levetta sinistra / croce | joystick (appare dove appoggi il pollice, metà sinistra) |
-| Passaggio rasoterra (tieni = più teso) | J (o Z) | A / Croce | PASSA |
-| Lancio alto | U (o C) | X / Quadrato | LANCIO |
-| Filtrante nello spazio | O (o V) | Y / Triangolo | FILTRANTE |
-| Tiro (tieni = più forte; levetta verso un angolo = a giro) | K (o X) | B / Cerchio | TIRA |
-| Scatto | Shift / Spazio | RT / R2 | SCATTO |
-| Finta | L (o B) | LT / L2 | FINTA |
-| Skill speciale | I (o N) | RB / R1 | SKILL |
-| Cambio giocatore | Q | LB / L1 | PASSA senza palla |
-| Pausa | Esc / P | Start | II in alto |
+| Movimento | WASD / frecce | levetta sinistra / croce | joystick (dove appoggi il pollice, a sinistra) |
+| Passaggio (tieni = più teso) | J (Z) | A / Croce | PASSA |
+| Lancio alto | U (C) | X / Quadrato | LANCIO |
+| Filtrante | O (V) | Y / Triangolo | FILTRANTE |
+| Tiro (tieni = più forte) | K (X) | B / Cerchio | TIRA |
+| Tiro piazzato / pallonetto | Spazio + K / U + K | RB + B / X + B | - |
+| **Trucchi** (8 direzioni) | L + direzione | levetta destra | swipe a destra |
+| **Trucchi avanzati** | Spazio + L + direzione | RB + levetta destra | swipe lungo |
+| Skill della nazione | I (N) | LB / L1 | SKILL |
+| Proteggi palla / contenimento | E (M), tieni | LT / L2, tieni | PROTEGGI / CONTIENI |
+| Gamebreaker (barra piena) | G | View / Select | GB! |
+| Scatto | Shift | RT / R2 | SCATTO |
+| Cambio giocatore | Q | A senza palla | PASSA senza palla |
+| Pausa · Reset allenamento · Debug | Esc · R · F2 | Start | II → RESET / DEBUG |
 
-Senza palla: TIRO = contrasto in piedi, LANCIO = scivolata, PASSAGGIO = cambio giocatore.
-Entrando da dietro si fa fallo; di lato il contrasto diventa una spallata (conta la forza).
+Senza palla: TIRO = contrasto in piedi (premuto durante un trucco lo legge), LANCIO = scivolata,
+PROTEGGI = contenimento. Da dietro è fallo, di lato è una spallata.
+
+Muri: passaggio verso una parete = **wall pass**, filtrante verso la parete = **uno-due col muro**,
+tiro verso la parete laterale vicina = **tiro di sponda**. La linea di mira mostra il rimbalzo
+(si disattiva in pausa o nel pannello debug).
+
+Palle alte: TIRO = colpo di testa, tiro al volo o rovesciata (dipende da altezza e posizione).
 
 ## Pubblicazione
 

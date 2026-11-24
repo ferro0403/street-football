@@ -4,6 +4,9 @@ import { CENTER_Y, DT, FIELD, PHYS } from './constants';
 import { clamp, dist, len, norm } from './math';
 import { chance, nextRandom, randSigned } from './rng';
 import { groundSpeedFor, rollTime } from './ball';
+import { addGb, comboStep, gbOn, loseGb } from './gamebreaker';
+import { planBankShot, type WallPlan } from './walls';
+import { trickFail } from './tricks';
 import {
   FEINT_COOLDOWN,
   SKILL_COOLDOWN,
@@ -26,7 +29,7 @@ import type { ActionKind, MatchState, PlayerState } from './types';
 import { attackDir, distToOppGoal, laneClear, nearestOpponent, oppGoalX, openness } from './world';
 
 export function setAction(p: PlayerState, kind: ActionKind, dur: number, dx = 0, dy = 0): void {
-  p.action = { kind, t: 0, dur, dx, dy, done: false, ax: 0, ay: 0, side: 0, target: -1 };
+  p.action = { kind, t: 0, dur, dx, dy, done: false, ax: 0, ay: 0, side: 0, target: -1, id: '', res: 0 };
 }
 
 /** Mette a terra / fa barcollare un giocatore. */
@@ -67,28 +70,46 @@ export function shotTarget(p: PlayerState, aim: number): [number, number] {
   return [oppGoalX(p.team), CENTER_Y + clamp(aim, -1, 1) * (FIELD.goalWidth / 2 - 0.35)];
 }
 
+export type ShotMode = 'power' | 'placed' | 'chip';
+
 /**
  * Tiro verso la porta avversaria.
  * @param power 0..1 (carica)
  * @param aim -1..1 spostamento laterale del bersaglio (asse y)
  * @param curl 0..1 quanto effetto a giro (la palla parte larga e rientra)
+ * @param mode potente (impreciso), piazzato (preciso, a giro, meno forte), pallonetto
  */
-export function shoot(s: MatchState, p: PlayerState, power: number, aim: number, curl = 0, bonus = 0): void {
+export function shoot(s: MatchState, p: PlayerState, power: number, aim: number, curl = 0, bonus = 0, mode: ShotMode = 'power'): void {
   const st = { ...p.stats, shooting: Math.min(99, p.stats.shooting + bonus) };
+  const gb = gbOn(s, p.team);
   power = clamp(power, 0, 1);
   let [gx, ty] = shotTarget(p, aim);
   const d0 = dist(p.x, p.y, gx, ty);
   const pressure = nearestOpponent(s, p, false).d < 1.6 ? 0.5 : 0;
-  const err = shotError(st) * (0.5 + power * 0.8) * (0.6 + d0 / 20) * (1 + pressure);
+  let err = shotError(st) * (0.5 + power * 0.8) * (0.6 + d0 / 20) * (1 + pressure);
+  if (mode === 'placed') {
+    power = Math.min(power, 0.5) + 0.1;
+    err *= 0.45;
+    if (Math.abs(aim) > 0.2) curl = Math.max(curl, 0.6);
+  }
+  if (mode === 'chip') err *= 0.8;
+  if (gb) err *= 0.6;
   ty += randSigned(s) * err;
 
-  const vh = 9 + (maxShotSpeed(st) - 9) * power;
+  let vh = (9 + (maxShotSpeed(st) * s.tune.shot - 9) * power) * (gb ? 1.15 : 1);
   const skill = st.shooting / 99;
-  const th = clamp(0.2 + power * power * 0.95 + nextRandom(s) * power * (1.25 - skill) * 0.9, 0.15, 3.5);
+  let th = clamp(0.2 + power * power * 0.95 + nextRandom(s) * power * (1.25 - skill) * 0.9, 0.15, 3.5);
+  if (mode === 'placed') th = 0.25 + nextRandom(s) * 0.45;
 
   releaseBall(s, p);
   const b = s.ball;
   const d = dist(b.x, b.y, gx, ty);
+  if (mode === 'chip') {
+    // Pallonetto: parabola alta che scende sotto la traversa.
+    vh = clamp(d / 1.2, 7, 15);
+    th = 1.05 + nextRandom(s) * 0.25;
+    curl = 0;
+  }
   const t = Math.max(0.15, d / vh);
 
   // Effetto a giro: la palla parte verso l'esterno del palo e rientra.
@@ -99,19 +120,71 @@ export function shoot(s: MatchState, p: PlayerState, power: number, aim: number,
   const [dx, dy] = norm(gx - b.x, aimY - b.y);
   b.vx = dx * vh;
   b.vy = dy * vh;
-  // spin > 0 spinge a sinistra della velocità: deve spingere verso il centro della porta.
   b.spin = a > 0 ? -sideSign * a * (b.vx >= 0 ? 1 : -1) : 0;
-  b.vz = clamp((th - b.z + 0.5 * PHYS.gravity * t * t) / t, 0.5, 14);
+  b.vz = clamp((th - b.z + 0.5 * PHYS.gravity * t * t) / t, 0.5, 16);
+  markShot(s, p, gb);
+  p.fx = dx;
+  p.fy = dy;
+  setAction(p, 'shoot', 0.32, dx, dy);
+  s.events.push({ type: 'shot', p: p.idx, team: p.team, power: vh, x: b.x, y: b.y, skill: mode });
+}
+
+function markShot(s: MatchState, p: PlayerState, gb: boolean): void {
+  const b = s.ball;
   b.shotId += 1;
   b.shotActive = true;
   b.shotTeam = p.team;
   b.shotX = b.x;
   b.shotY = b.y;
+  b.shotGb = gb;
   s.stats[p.team].shots += 1;
+}
+
+/** Tiro di sponda sul muro laterale. False se l'angolo non c'è. */
+export function bankShot(s: MatchState, p: PlayerState, side: -1 | 1, aim: number, power: number): boolean {
+  const gx = shotTarget(p, aim);
+  const pl = planBankShot(s, p, side, gx[1]);
+  if (!pl) return false;
+  const gb = gbOn(s, p.team);
+  releaseBall(s, p);
+  const b = s.ball;
+  const vh = (9 + (maxShotSpeed(p.stats) * s.tune.shot - 9) * clamp(0.5 + power * 0.4, 0, 1)) * (gb ? 1.15 : 1);
+  const e = shotError(p.stats) * 0.35;
+  const [dx, dy] = wobbleDir(pl.dx, pl.dy, randSigned(s) * e * 0.06);
+  const t = pl.d / vh;
+  b.vx = dx * vh;
+  b.vy = dy * vh;
+  b.vz = clamp((0.45 - b.z + 0.5 * PHYS.gravity * t * t) / t, 0.5, 12);
+  b.spin = 0;
+  markShot(s, p, gb);
   p.fx = dx;
   p.fy = dy;
   setAction(p, 'shoot', 0.32, dx, dy);
-  s.events.push({ type: 'shot', p: p.idx, team: p.team, power: vh, x: b.x, y: b.y });
+  s.events.push({ type: 'shot', p: p.idx, team: p.team, power: vh, x: b.x, y: b.y, skill: 'bank' }, { type: 'trick', p: p.idx, team: p.team, label: 'TIRO DI SPONDA!', pts: 0 });
+  return true;
+}
+
+function wobbleDir(dx: number, dy: number, e: number): [number, number] {
+  return norm(dx - dy * e, dy + dx * e);
+}
+
+/** Esegue un passaggio al muro (verso un compagno o uno-due verso se stessi). */
+export function wallPass(s: MatchState, p: PlayerState, plan: WallPlan, kind: 4 | 5): void {
+  releaseBall(s, p);
+  const b = s.ball;
+  b.vx = plan.dx * plan.v0;
+  b.vy = plan.dy * plan.v0;
+  b.vz = 0;
+  b.z = 0;
+  // Chi calcia non può riprenderla subito: prima deve tornare dal muro.
+  b.kicker = p.idx;
+  b.kickCd = 0.45;
+  if (kind === 5) {
+    // Uno-due: il difensore davanti segue l'uomo e perde un tempo (se il duello riesce).
+    const d = opponentAhead(s, p, 3, 0.2);
+    if (d && chance(s, clamp(0.6 + (p.stats.passing - d.stats.defense) * 0.008, 0.15, 0.9))) knockDown(d, 'stagger', 0.55);
+  }
+  finishPass(s, p, plan.receiver, kind, plan.tx, plan.ty, plan.dx, plan.dy);
 }
 
 // --- Passaggi ------------------------------------------------------------------------
@@ -134,15 +207,15 @@ export function groundPass(s: MatchState, p: PlayerState, target: number, charge
   let ty = r.y;
   for (let i = 0; i < 2; i++) {
     const d = dist(p.x, p.y, tx, ty);
-    const v0 = groundSpeedFor(d, vEnd);
-    const t = rollTime(v0, d);
+    const v0 = groundSpeedFor(d, vEnd, s.tune.friction);
+    const t = rollTime(v0, d, s.tune.friction);
     tx = clamp(r.x + r.vx * t * 0.85, 0.6, FIELD.length - 0.6);
     ty = clamp(r.y + r.vy * t * 0.85, 0.6, FIELD.width - 0.6);
   }
   releaseBall(s, p);
   const b = s.ball;
   const d = dist(b.x, b.y, tx, ty);
-  const v0 = groundSpeedFor(d, vEnd);
+  const v0 = groundSpeedFor(d, vEnd, s.tune.friction);
   let [dx, dy] = norm(tx - b.x, ty - b.y);
   [dx, dy] = wobble(dx, dy, passError(st) * randSigned(s));
   b.vx = dx * v0;
@@ -201,10 +274,11 @@ export function throughPass(s: MatchState, p: PlayerState, target: number, dirX:
   // Il compagno impiega tR ad arrivare: la palla deve arrivarci più o meno insieme.
   const tR = dist(r.x, r.y, tx, ty) / (runSpeed(r.stats) * 1.2);
   let vEnd = 3;
-  let v0 = groundSpeedFor(d, vEnd);
-  if (rollTime(v0, d) > tR + 0.4) {
+  const f = s.tune.friction;
+  let v0 = groundSpeedFor(d, vEnd, f);
+  if (rollTime(v0, d, f) > tR + 0.4) {
     vEnd = 5;
-    v0 = groundSpeedFor(d, vEnd);
+    v0 = groundSpeedFor(d, vEnd, f);
   }
   let [dx, dy] = norm(tx - b.x, ty - b.y);
   [dx, dy] = wobble(dx, dy, passError(st) * 1.2 * randSigned(s));
@@ -219,6 +293,8 @@ function finishPass(s: MatchState, p: PlayerState, target: number, kind: number,
   const b = s.ball;
   b.passTarget = target;
   b.passKind = kind;
+  b.passer = p.idx;
+  if (kind !== 5) comboStep(s, p.team, 'pass');
   b.passTx = tx;
   b.passTy = ty;
   p.fx = dx;
@@ -249,7 +325,7 @@ export function pickPassTarget(s: MatchState, p: PlayerState, dirX: number, dirY
   const [ux, uy] = norm(dirX, dirY);
   const hasDir = ux !== 0 || uy !== 0;
   for (const q of s.players) {
-    if (q.team !== p.team || q.idx === p.idx) continue;
+    if (!q.active || q.team !== p.team || q.idx === p.idx) continue;
     const [qx, qy] = norm(q.x - p.x, q.y - p.y);
     const d = dist(p.x, p.y, q.x, q.y);
     let score: number;
@@ -282,6 +358,7 @@ export function startTackle(s: MatchState, p: PlayerState): boolean {
   let [dx, dy] = norm(b.x - p.x, b.y - p.y);
   if (dx === 0 && dy === 0) [dx, dy] = [p.fx, p.fy];
   setAction(p, 'tackle', 0.32, dx, dy);
+  p.tackleT = 0.4;
   p.vx = dx * 4.5 + p.vx * 0.3;
   p.vy = dy * 4.5 + p.vy * 0.3;
   p.fx = dx;
@@ -386,6 +463,21 @@ export function resolveTackle(s: MatchState, p: PlayerState): void {
     return;
   }
   if (c.team === p.team || c.role === 'gk') return;
+  // Lettura del trucco: contrasto nel momento giusto, durante il trucco.
+  if (c.action.kind === 'trick' && c.action.res === 0 && dist(p.x, p.y, c.x, c.y) < 1.9) {
+    if (chance(s, clamp((0.55 + (p.stats.defense - c.stats.dribbling) * 0.01) * s.tune.tackle, 0.1, 0.92))) {
+      c.action.res = -1;
+      c.juggle = 0;
+      winBall(s, p, c, 0, 0, true);
+      knockDown(c, 'stagger', 0.45);
+      loseGb(s, c.team, 0.08);
+      s.events.push({ type: 'trickFail', p: c.idx, team: c.team, label: 'LETTO!', x: c.x, y: c.y }, { type: 'tackle', p: p.idx, team: p.team, x: c.x, y: c.y });
+    } else {
+      knockDown(p, 'stagger', 0.6);
+      s.events.push({ type: 'dodge', p: c.idx, team: c.team, x: c.x, y: c.y });
+    }
+    return;
+  }
   if (c.evade > 0) {
     knockDown(p, 'stagger', 0.6);
     s.events.push({ type: 'dodge', p: c.idx, team: c.team, x: c.x, y: c.y });
@@ -395,7 +487,7 @@ export function resolveTackle(s: MatchState, p: PlayerState): void {
   if (from === 0) {
     // Spallata.
     a.kind = 'shoulder';
-    if (chance(s, shoulderChance(p.stats, c.stats))) {
+    if (chance(s, clamp(shoulderChance(p.stats, c.stats) * s.tune.tackle * (c.shield ? 0.85 : 1), 0.05, 0.95))) {
       winBall(s, p, c, a.dx * 3, a.dy * 3, chance(s, 0.5));
       if (p.stats.strength - c.stats.strength > 15) knockDown(c, 'fall', 0.6);
       else knockDown(c, 'stagger', 0.45);
@@ -406,7 +498,9 @@ export function resolveTackle(s: MatchState, p: PlayerState): void {
     }
     return;
   }
-  const pr = tackleChance(p.stats, c.stats) - (from < 0 ? 0.15 : 0);
+  // Protezione palla e palleggio rendono il contrasto in piedi molto più difficile.
+  const guard = (c.shield ? 0.45 : 1) * (c.juggle > 0 ? 0.5 : 1);
+  const pr = clamp((tackleChance(p.stats, c.stats) - (from < 0 ? 0.15 : 0)) * guard * s.tune.tackle, 0.04, 0.95);
   if (chance(s, pr)) {
     winBall(s, p, c, a.dx * 4.5, a.dy * 4.5, chance(s, 0.4 + (p.stats.defense - c.stats.dribbling) * 0.01));
     knockDown(c, 'stagger', 0.4);
@@ -483,7 +577,7 @@ function opponentAhead(s: MatchState, p: PlayerState, maxD: number, minDot: numb
   let best: PlayerState | null = null;
   let bd = maxD;
   for (const q of s.players) {
-    if (q.team === p.team || q.role === 'gk') continue;
+    if (!q.active || q.team === p.team || q.role === 'gk') continue;
     const d = dist(p.x, p.y, q.x, q.y);
     if (d > bd) continue;
     const [rx, ry] = norm(q.x - p.x, q.y - p.y);
@@ -505,8 +599,33 @@ export function special(s: MatchState, p: PlayerState, side: number): boolean {
   if (!p.special || p.skillCd > 0 || p.stun > 0 || s.ball.owner !== p.idx) return false;
   const b = s.ball;
   const sd = side === 0 ? (s.tick % 2 === 0 ? 1 : -1) : side > 0 ? 1 : -1;
-  const ev = () => s.events.push({ type: 'special', p: p.idx, team: p.team, skill: p.special ?? '', x: p.x, y: p.y });
-
+  // Anche la skill della nazione è un duello (niente mosse "sicure" ripetibili all'infinito).
+  const foe = opponentAhead(s, p, 3, -0.2);
+  const heat = Math.max(0, p.heat - 0.3);
+  p.heat = Math.min(1.5, p.heat + 0.35 + (p.lastTrick === 'special' ? 0.25 : 0));
+  p.lastTrick = 'special';
+  if (foe && !gbOn(s, p.team)) {
+    let pr = 0.74 + (p.stats.dribbling - foe.stats.defense) * 0.008 - heat * 0.4 + (s.tune.trick - 1) * 0.3;
+    if (foe.stun > 0) pr += 0.3;
+    let read = false;
+    if (!foe.human) {
+      const memory = foe.seenTrick === 'special' && foe.seenT > 0 ? 0.25 : 0;
+      read = chance(s, clamp((0.05 + foe.stats.defense * 0.0018 + memory) * s.tune.ai, 0, 0.7));
+    }
+    foe.seenTrick = 'special';
+    foe.seenT = 5;
+    if (read || !chance(s, clamp(pr, 0.1, 0.95))) {
+      p.skillCd = SKILL_COOLDOWN;
+      trickFail(s, p, foe, read ? 'LETTO!' : 'RESPINTO!');
+      return true;
+    }
+  }
+  let pts = 0;
+  if (foe) {
+    comboStep(s, p.team, 'trick');
+    pts = addGb(s, p.team, 0.16 * Math.max(0, 1 - heat * 0.7));
+  }
+  const ev = () => s.events.push({ type: 'special', p: p.idx, team: p.team, skill: p.special ?? '', x: p.x, y: p.y, pts });
   switch (p.special) {
     case 'veronica': {
       // Giro di 360° sulla palla che porta il giocatore ALLE SPALLE del difensore.
@@ -540,7 +659,7 @@ export function special(s: MatchState, p: PlayerState, side: number): boolean {
       p.evade = 0.5;
       // Chi è davanti abbocca alla finta: resta piantato.
       for (const q of s.players) {
-        if (q.team !== p.team && q.role !== 'gk' && dist(p.x, p.y, q.x, q.y) < 2.6) knockDown(q, 'stagger', 0.75);
+        if (q.active && q.team !== p.team && q.role !== 'gk' && dist(p.x, p.y, q.x, q.y) < 2.6) knockDown(q, 'stagger', 0.75);
       }
       break;
     }

@@ -229,21 +229,6 @@ describe('le statistiche contano', () => {
     expect(wins(92, 45)).toBeGreaterThan(wins(45, 92) + 30);
   });
 
-  it('la finta schiva il contrasto', () => {
-    const s = newMatch({ seed: 10, human: true });
-    toPlay(s);
-    const d = s.players[6];
-    const me = controlled(s);
-    Object.assign(d, { x: me.x + 1, y: me.y, tackleCd: 0, stun: 0 });
-    stepMatch(s, { p1: input({ feint: true }) });
-    expect(me.evade).toBeGreaterThan(0);
-    startTackle(s, d);
-    d.action.t = 0.2;
-    Object.assign(d, { x: me.x + 0.8, y: me.y });
-    resolveTackle(s, d);
-    expect(s.ball.owner).toBe(me.idx);
-    expect(d.stun).toBeGreaterThan(0);
-  });
 });
 
 describe('portiere', () => {

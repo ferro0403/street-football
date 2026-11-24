@@ -59,7 +59,7 @@ export function updateKeeper(s: MatchState, k: PlayerState): KeeperIntent {
       let best = -1;
       let bv = -Infinity;
       for (const q of s.players) {
-        if (q.team !== k.team || q.idx === k.idx) continue;
+        if (!q.active || q.team !== k.team || q.idx === k.idx) continue;
         const v = passValue(s, k, q);
         if (v > bv) {
           bv = v;
@@ -141,7 +141,7 @@ export function updateKeeper(s: MatchState, k: PlayerState): KeeperIntent {
       const myT = dist(k.x, k.y, b.x, b.y) / keeperSpeed(k.stats);
       let oppT = Infinity;
       for (const q of s.players) {
-        if (q.team === k.team) continue;
+        if (!q.active || q.team === k.team) continue;
         oppT = Math.min(oppT, dist(q.x, q.y, b.x, b.y) / 7);
       }
       if (myT < oppT - 0.1) return seekTo(k, b.x, b.y, keeperSpeed(k.stats) * 1.3);
@@ -176,7 +176,10 @@ function checkSave(s: MatchState, k: PlayerState): void {
   const bs = len(b.vx, b.vy);
   const flight = dist(b.shotX, b.shotY, b.x, b.y) / Math.max(bs, 1);
   // Non ancora reagito: para solo se la palla gli arriva addosso (blocco col corpo).
-  const p = k.gk.react > 0 ? (lateral < 0.55 && b.z < 1.6 ? 0.6 : 0.12) : keeperSaveChance(k.stats, bs, lateral, b.z, flight);
+  let p = k.gk.react > 0 ? (lateral < 0.55 && b.z < 1.6 ? 0.6 : 0.12) : keeperSaveChance(k.stats, bs, lateral, b.z, flight);
+  p = Math.min(0.95, p * s.tune.keeper);
+  // Tiro Gamebreaker: quasi imparabile.
+  if (b.shotGb) p *= 0.3;
   if (!chance(s, p)) return; // gol (o palla che passa)
   s.stats[k.team].saves += 1;
   s.stats[b.shotTeam as 0 | 1].onTarget += 1;

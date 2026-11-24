@@ -11,6 +11,12 @@ import { sfx, unlockAudio } from '../fx/sfx';
 import { fullscreenSupported, isFullscreen, isIOS, isStandalone, toggleFullscreen } from '../fullscreen';
 
 const DURATIONS = [60, 120, 180, 300];
+const MODES: { label: string; training?: { defenders: number; keeper: boolean } }[] = [
+  { label: 'PARTITA 5 CONTRO 5' },
+  { label: 'ALLENAMENTO · 1 DIFENSORE', training: { defenders: 1, keeper: true } },
+  { label: 'ALLENAMENTO · 2 DIFENSORI', training: { defenders: 2, keeper: true } },
+  { label: 'ALLENAMENTO · SOLO PORTIERE', training: { defenders: 0, keeper: true } },
+];
 
 interface Row {
   value: Phaser.GameObjects.Text;
@@ -24,6 +30,7 @@ export class MenuScene extends Phaser.Scene {
   private home = 0;
   private away = 1;
   private dur = 2;
+  private mode = 0;
   private focus = 0;
   private rows: Row[] = [];
   private btns: { b: Btn; act: () => void }[] = [];
@@ -63,8 +70,8 @@ export class MenuScene extends Phaser.Scene {
     this.tweens.add({ targets: title, scale: { from: 1, to: 1.04 }, duration: 700, yoyo: true, repeat: -1, ease: 'Sine.InOut' });
     text(this, cx, title.y + 40 * k, 'CALCIO DI STRADA 5 CONTRO 5', 11, '#ffffff');
 
-    const y0 = title.y + 100 * k;
-    const gap = 62 * k + 4;
+    const y0 = title.y + 88 * k;
+    const gap = 56 * k + 4;
     this.addRow(cx, y0, rowW, 'LA TUA SQUADRA', (d) => {
       this.home = Phaser.Math.Wrap(this.home + d, 0, TEAMS.length);
       if (this.home === this.away) this.away = Phaser.Math.Wrap(this.away + d, 0, TEAMS.length);
@@ -76,9 +83,12 @@ export class MenuScene extends Phaser.Scene {
     this.addRow(cx, y0 + gap * 2, rowW, 'DURATA', (d) => {
       this.dur = Phaser.Math.Wrap(this.dur + d, 0, DURATIONS.length);
     });
+    this.addRow(cx, y0 + gap * 3, rowW, 'MODALITÀ', (d) => {
+      this.mode = Phaser.Math.Wrap(this.mode + d, 0, MODES.length);
+    });
 
     // Pulsanti: GIOCA grande, poi COMANDI e SCHERMO INTERO.
-    const by = Math.min(h - ins.b - 40, y0 + gap * 2 + 80 * k + 20);
+    const by = Math.min(h - ins.b - 36, y0 + gap * 3 + 70 * k + 14);
     const bw = Math.min(200, (w - ins.l - ins.r - 60) / 4);
     const showFs = isFullscreen() || (!isStandalone() && (fullscreenSupported() || isIOS()));
     const items: [string, () => void][] = [
@@ -152,7 +162,8 @@ export class MenuScene extends Phaser.Scene {
   private refresh(): void {
     this.rows[0].value.setText(this.teamLine(this.home));
     this.rows[1].value.setText(this.teamLine(this.away));
-    this.rows[2].value.setText(`${DURATIONS[this.dur] / 60} MINUTI`);
+    this.rows[2].value.setText(MODES[this.mode].training ? 'SENZA TEMPO' : `${DURATIONS[this.dur] / 60} MINUTI`);
+    this.rows[3].value.setText(MODES[this.mode].label);
     this.rows.forEach((r, i) =>
       r.bg.setStrokeStyle(i === this.focus ? 3 : 2, i === this.focus ? COLORS.yellow : 0xffffff, i === this.focus ? 1 : 0.25),
     );
@@ -207,29 +218,38 @@ export class MenuScene extends Phaser.Scene {
   }
 
   private showHelp(): void {
-    this.showPanel([
-      '                  COMANDI',
-      '',
-      'AZIONE          TASTIERA     CONTROLLER',
-      'Movimento       WASD/frecce  levetta sx',
-      'Passaggio       J  (Z)       A / Croce',
-      'Lancio alto     U  (C)       X / Quadrato',
-      'Filtrante       O  (V)       Y / Triangolo',
-      'Tiro (tieni)    K  (X)       B / Cerchio',
-      'Scatto          Shift        RT / R2',
-      'Finta           L  (B)       LT / L2',
-      'Skill speciale  I  (N)       RB / R1',
-      'Cambio giocat.  Q            LB / L1',
-      'Pausa           Esc / P      Start',
-      '',
-      'SENZA PALLA',
-      'Tiro = contrasto in piedi  Lancio = scivolata',
-      'Passaggio = cambio giocatore',
-      'Da dietro e fallo! Di lato e una spallata.',
-      '',
-      'Passaggio: piu tieni, piu e teso (arriva sempre).',
-      'Tiro: mira con la levetta verso un angolo = a giro.',
-    ]);
+    this.showPanel(
+      [
+        '                     COMANDI',
+        'AZIONE            TASTIERA         CONTROLLER',
+        'Movimento         WASD / frecce    levetta sx',
+        'Passaggio         J (Z)            A / Croce',
+        'Lancio alto       U (C)            X / Quadrato',
+        'Filtrante         O (V)            Y / Triangolo',
+        'Tiro (tieni)      K (X)            B / Cerchio',
+        'Scatto            Shift            RT / R2',
+        'TRUCCHI           L + direzione    levetta destra',
+        'Trucchi avanzati  Spazio + L+dir   RB + levetta dx',
+        'Skill nazione     I (N)            LB / L1',
+        'Proteggi palla    E (M) tieni      LT / L2 tieni',
+        'Gamebreaker       G                View / Select',
+        'Cambio giocatore  Q                A senza palla',
+        'Pausa · Debug     Esc · F2         Start',
+        '',
+        'TRUCCHI (rispetto a dove guardi): avanti SOMBRERO,',
+        'indietro PANNA, lati FINTA, diagonali DOPPIO PASSO',
+        'e TRASCINATA. Avanzati: ARCOBALENO, RULETA, ELASTICO,',
+        'CROQUETA, PALLEGGIO (indietro, da fermo).',
+        'Ogni trucco e un duello: ripeterlo funziona sempre meno.',
+        'MURI: passa verso una parete = WALL PASS. Filtrante',
+        'verso il muro = UNO-DUE. Tiro verso il muro = di sponda.',
+        'TIRI: Spazio+K piazzato, U+K pallonetto, palla alta = testa.',
+        'SENZA PALLA: K contrasto (anche per leggere i trucchi),',
+        'U scivolata, E contenimento. Da dietro e fallo!',
+        'TELEFONO: joystick a sinistra, SWIPE a destra = trucchi.',
+      ],
+      9,
+    );
   }
 
   private fullscreen(): void {
@@ -257,7 +277,12 @@ export class MenuScene extends Phaser.Scene {
     sfx.whistle();
     // Su telefono si entra direttamente a schermo intero (se il browser lo consente).
     if (isTouchDevice() && fullscreenSupported() && !isFullscreen()) toggleFullscreen(this);
-    this.scene.start('match', { home: TEAMS[this.home].id, away: TEAMS[this.away].id, duration: DURATIONS[this.dur] });
+    this.scene.start('match', {
+      home: TEAMS[this.home].id,
+      away: TEAMS[this.away].id,
+      duration: DURATIONS[this.dur],
+      training: MODES[this.mode].training,
+    });
   }
 
   update(t: number, dt: number): void {
